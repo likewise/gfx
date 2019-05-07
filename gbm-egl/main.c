@@ -250,19 +250,23 @@ int writeImage(char* filename, int width, int height, void *buffer, char* title)
 
 void Render(void)
 {
+  /* X, Y, Z */
+  /* negative X is left */
+  /* negative Y seems up: @TODO unexpected */
   GLfloat vertex[] = {
-    -1, -1, 0,
-    -1, 1, 0,
-    1, 1, 0,
-    1, -1, 0
+    -1, -1, 0, /* index 0: left top */
+    -1, 1, 0, /* index 1: left bottom */
+    1, 0.8, 0, /* index 2: right bottom */
+    1, -0.9, 0 /* index 3: right top */
   };
+
   GLuint index[] = {
-    0, 1, 2
+    0, 1, 2, 0, 2, 3
   };
 
   GLint position = glGetAttribLocation(program, "positionIn");
-  glEnableVertexAttribArray(position);
   glVertexAttribPointer(position, 3, GL_FLOAT, 0, 0, vertex);
+  glEnableVertexAttribArray(position);
 
   assert(glGetError() == GL_NO_ERROR);
 
