@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <time.h>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -17,7 +18,7 @@ EGLSurface surface;
 EGLContext context;
 struct gbm_device *gbm;
 
-#define TARGET_SIZE 256
+#define TARGET_SIZE 3840
 
 void RenderTargetInit(void)
 {
@@ -34,8 +35,10 @@ void RenderTargetInit(void)
   EGLint minorVersion;
   EGLBoolean egl_rc;
 
-  int epoxy_gl_ver = epoxy_gl_version();
-  printf("libepoxy says %d\n", epoxy_gl_ver);
+#if 1
+  int epoxy_egl_ver = epoxy_egl_version(display);
+  printf("libepoxy says %d\n", epoxy_egl_ver);
+#endif
 
   egl_rc = eglInitialize(display, &majorVersion, &minorVersion);
   assert(egl_rc == EGL_TRUE);
@@ -51,6 +54,7 @@ void RenderTargetInit(void)
   context = eglCreateContext(display, NULL, EGL_NO_CONTEXT, contextAttribs);
   assert(context != EGL_NO_CONTEXT);
 
+  /* OES_surfaceless_context */
   egl_rc = eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, context);
   assert(egl_rc == EGL_TRUE);
 }
@@ -106,7 +110,7 @@ void CheckFrameBufferStatus(void)
     printf("Framebuffer complete\n");
     break;
   case GL_FRAMEBUFFER_UNSUPPORTED:
-    printf("Framebuffer unsuported\n");
+    printf("Framebuffer unsupported\n");
     break;
   case GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT:
     printf("GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT\n");
@@ -125,9 +129,9 @@ void CheckFrameBufferStatus(void)
 void InitFBO(void)
 {
   struct gbm_bo * bo = gbm_bo_create(gbm, TARGET_SIZE, TARGET_SIZE,
-                     GBM_FORMAT_ARGB8888,
-                     //GBM_BO_USE_LINEAR |
-                     GBM_BO_USE_SCANOUT);
+                     GBM_FORMAT_ARGB8888, GBM_BO_USE_SCANOUT
+                     /*GBM_BO_USE_LINEAR*/
+                     /*GBM_BO_USE_SCANOUT*/);
   EGLImageKHR image = eglCreateImageKHR(display, context,
                       EGL_NATIVE_PIXMAP_KHR, bo, NULL);
   assert(image != EGL_NO_IMAGE_KHR);
@@ -263,11 +267,20 @@ int writeImage(char* filename, int width, int height, void *buffer, char* title)
   return code;
 }
 
+/* number of coordinates per vertex */
+#define DIM_VERTEX 3
+/* number of primitives */
+#define NUM_PRIM 2048*8
+/* number of vertices per primitive, assuming quad */
+#define NUM_PRIM_VERT 4
+
 void Render(void)
 {
   /* X, Y, Z */
   /* negative X is left */
   /* negative Y seems up: @TODO unexpected */
+
+#if 0
   GLfloat vertex[] = {
     -1, -1, 0, /* index 0: left top */
     -1, 1, 0, /* index 1: left bottom */
@@ -278,29 +291,95 @@ void Render(void)
   GLuint index[] = {
     0, 1, 2, 0, 2, 3
   };
+#endif
+
+  srand((unsigned int)time(NULL));
+
+  GLfloat *vertex;
+  vertex = malloc(sizeof(GLfloat) * DIM_VERTEX * NUM_PRIM * 4);
+  assert(vertex);
+
+  GLuint *index;
+  index = malloc(sizeof(GLuint) * NUM_PRIM * 6);
+  assert(index);
+
+  int v = 0;
+  while (v < (DIM_VERTEX * NUM_PRIM * NUM_PRIM_VERT)) {
+    float x, y, w, h;
+    w = 10.0 / TARGET_SIZE;
+    h = 0.12; //100.0 / TARGET_SIZE;
+    x = -1.0 + (2.0 - w) * ((float)rand() / (float)(RAND_MAX));
+    y = -1.0 + (2.0 - h) * ((float)rand() / (float)(RAND_MAX));
+    /* first point */
+    vertex[v++] = x;
+    vertex[v++] = y;
+    vertex[v++] = 0.0;
+    /* second point */
+    vertex[v++] = x;
+    vertex[v++] = y + h;
+    vertex[v++] = 0.0;
+    /* third point */
+    vertex[v++] = x + w;
+    vertex[v++] = y + h;
+    vertex[v++] = 0.0;
+    /* fourth point */
+    vertex[v++] = x + w;
+    vertex[v++] = y;
+    vertex[v++] = 0.0;
+  }
+
+  int i = 0;
+  /* vertex index */
+  GLuint vi = 0;
+  while (i < (NUM_PRIM * 6)) {
+    /* first triangle */
+    index[i++] = vi + 0;
+    index[i++] = vi + 1;
+    index[i++] = vi + 2;
+    /* second triangle */
+    index[i++] = vi + 0;
+    index[i++] = vi + 2;
+    index[i++] = vi + 3;
+    vi += 4;
+  }
 
   GLint position = glGetAttribLocation(program, "positionIn");
-  glVertexAttribPointer(position, 3, GL_FLOAT, 0, 0, vertex);
+  glVertexAttribPointer(position, DIM_VERTEX, GL_FLOAT, 0, 0, vertex);
   glEnableVertexAttribArray(position);
 
   assert(glGetError() == GL_NO_ERROR);
 
+#if 1
+glEnable(GL_BLEND);
+glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+#endif
+
+  int count = 60;
+  while (count--) {
   glClear(GL_COLOR_BUFFER_BIT
       //| GL_DEPTH_BUFFER_BIT
     );
-  printf("%x\n", glGetError());
+  assert(glGetError() == GL_NO_ERROR);
+  //printf("%x\n", glGetError());
+
+  glDrawElements(GL_TRIANGLES, NUM_PRIM * 6, GL_UNSIGNED_INT, index);
+  //glFlush();
   assert(glGetError() == GL_NO_ERROR);
 
-  glDrawElements(GL_TRIANGLES, sizeof(index)/sizeof(GLuint), GL_UNSIGNED_INT, index);
+//  eglSwapBuffers(display, surface);
+  printf("glFinish() %d\n", count);
+  glFinish();
+  }
 
-  assert(glGetError() == GL_NO_ERROR);
-
-  eglSwapBuffers(display, surface);
-
-  GLubyte result[TARGET_SIZE * TARGET_SIZE * 4] = {0};
+  GLubyte *result;
+  result = malloc(TARGET_SIZE * TARGET_SIZE * 4);
+  assert(result);
+  printf("glFinish()\n");
+  glFinish();
+  printf("glReadPixels()\n");
   glReadPixels(0, 0, TARGET_SIZE, TARGET_SIZE, GL_RGBA, GL_UNSIGNED_BYTE, result);
   assert(glGetError() == GL_NO_ERROR);
-
+  printf("writeImage()\n");
   assert(!writeImage("screenshot.png", TARGET_SIZE, TARGET_SIZE, result, "hello"));
 }
 

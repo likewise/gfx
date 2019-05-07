@@ -2,5 +2,5 @@
 
 
 all:
-	$(CC) -std=c99 -g -o gbm-egl-performance main.c -lgbm -lepoxy -lpng
+	$(CC) $(CFLAGS) $(LDFLAGS) -std=c99 -o gbm-egl-performance main.c -lgbm -lepoxy -lpng
 
