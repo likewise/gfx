@@ -1,15 +1,18 @@
+#version 300 es
 precision mediump float;
 
-varying vec4 vVaryingColor;
+in vec4 vVaryingColor;
+
+out vec4 fragColor;
 
 void main() {
 #if 1
 	if (vVaryingColor.x < 0.0) {
-		gl_FragColor = vec4(1.0, 1.0, 1.0, 1);
+		fragColor = vec4(1.0, 1.0, 1.0, 1);
 	} else {
-		gl_FragColor = vVaryingColor;
+		fragColor = vVaryingColor;
 	}
 #else
-	gl_FragColor = vec4(1.0, 0.0, 0.0, 1);
+	fragColor = vec4(1.0, 0.0, 0.0, 1);
 #endif
 }

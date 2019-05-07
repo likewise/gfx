@@ -1,6 +1,7 @@
-attribute vec3 positionIn;
+#version 300 es
+in vec3 positionIn;
 
-varying vec4 vVaryingColor;
+out vec4 vVaryingColor;
 
 void main()
 {
