@@ -27,21 +27,29 @@ void RenderTargetInit(void)
   gbm = gbm_create_device(fd);
   assert(gbm != NULL);
 
-  assert((display = eglGetDisplay(gbm)) != EGL_NO_DISPLAY);
+  display = eglGetDisplay(gbm);
+  assert(display  != EGL_NO_DISPLAY);
 
   EGLint majorVersion;
   EGLint minorVersion;
-  assert(eglInitialize(display, &majorVersion, &minorVersion) == EGL_TRUE);
+  EGLBoolean egl_rc;
 
-  assert(eglBindAPI(EGL_OPENGL_ES_API) == EGL_TRUE);
+  egl_rc = eglInitialize(display, &majorVersion, &minorVersion);
+  assert(egl_rc == EGL_TRUE);
+
+  egl_rc = eglBindAPI(EGL_OPENGL_ES_API);
+  assert(egl_rc == EGL_TRUE);
 
   const EGLint contextAttribs[] = {
     EGL_CONTEXT_CLIENT_VERSION, 2,
     EGL_NONE
   };
-  assert((context = eglCreateContext(display, NULL, EGL_NO_CONTEXT, contextAttribs)) != EGL_NO_CONTEXT);
 
-  assert(eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, context) == EGL_TRUE);
+  context = eglCreateContext(display, NULL, EGL_NO_CONTEXT, contextAttribs);
+  assert(context != EGL_NO_CONTEXT);
+
+  egl_rc = eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, context);
+  assert(egl_rc == EGL_TRUE);
 }
 
 GLuint LoadShader(const char *name, GLenum type)
@@ -68,6 +76,7 @@ GLuint LoadShader(const char *name, GLenum type)
   glShaderSource(shader, 1, source, &size);
   glCompileShader(shader);
   free(buff);
+
   glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
   if (!compiled) {
     GLint infoLen = 0;
@@ -112,33 +121,33 @@ void CheckFrameBufferStatus(void)
 
 void InitFBO(void)
 {
-	struct gbm_bo * bo = gbm_bo_create(gbm, TARGET_SIZE, TARGET_SIZE, 
-									   GBM_FORMAT_ARGB8888, 
-									   //GBM_BO_USE_LINEAR | 
-									   GBM_BO_USE_SCANOUT);
-	EGLImageKHR image = eglCreateImageKHR(display, context,
-										  EGL_NATIVE_PIXMAP_KHR, bo, NULL);
-    assert(image != EGL_NO_IMAGE_KHR);
+  struct gbm_bo * bo = gbm_bo_create(gbm, TARGET_SIZE, TARGET_SIZE,
+                     GBM_FORMAT_ARGB8888,
+                     //GBM_BO_USE_LINEAR |
+                     GBM_BO_USE_SCANOUT);
+  EGLImageKHR image = eglCreateImageKHR(display, context,
+                      EGL_NATIVE_PIXMAP_KHR, bo, NULL);
+  assert(image != EGL_NO_IMAGE_KHR);
 
-	GLuint texid;
-	glGenTextures(1, &texid);
-	glBindTexture(GL_TEXTURE_2D, texid);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, image);
+  GLuint texid;
+  glGenTextures(1, &texid);
+  glBindTexture(GL_TEXTURE_2D, texid);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, image);
 
-	GLuint fbid;
-	glGenFramebuffers(1, &fbid);
-	glBindFramebuffer(GL_FRAMEBUFFER, fbid);
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texid, 0);
+  GLuint fbid;
+  glGenFramebuffers(1, &fbid);
+  glBindFramebuffer(GL_FRAMEBUFFER, fbid);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texid, 0);
 /*
-	GLuint rbid;
-	glGenRenderbuffers(1, &rbid);
-	glBindRenderbuffer(GL_RENDERBUFFER, rbid);
-	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, TARGET_SIZE, TARGET_SIZE);
-	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rbid);
+  GLuint rbid;
+  glGenRenderbuffers(1, &rbid);
+  glBindRenderbuffer(GL_RENDERBUFFER, rbid);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, TARGET_SIZE, TARGET_SIZE);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rbid);
 //*/
-	CheckFrameBufferStatus();
+  CheckFrameBufferStatus();
 }
 
 void InitGLES(void)
@@ -146,9 +155,12 @@ void InitGLES(void)
   GLint linked;
   GLuint vertexShader;
   GLuint fragmentShader;
-  assert((vertexShader = LoadShader("vert.glsl", GL_VERTEX_SHADER)) != 0);
-  assert((fragmentShader = LoadShader("frag.glsl", GL_FRAGMENT_SHADER)) != 0);
-  assert((program = glCreateProgram()) != 0);
+  vertexShader = LoadShader("vert.glsl", GL_VERTEX_SHADER);
+  assert(vertexShader != 0);
+  fragmentShader = LoadShader("frag.glsl", GL_FRAGMENT_SHADER);
+  assert(fragmentShader  != 0);
+  program = glCreateProgram();
+  assert(program  != 0);
   glAttachShader(program, vertexShader);
   glAttachShader(program, fragmentShader);
   glLinkProgram(program);
@@ -218,8 +230,8 @@ int writeImage(char* filename, int width, int height, void *buffer, char* title)
 
   // Write header (8 bit colour depth)
   png_set_IHDR(png_ptr, info_ptr, width, height,
-	       8, PNG_COLOR_TYPE_RGB_ALPHA, PNG_INTERLACE_NONE,
-	       PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+         8, PNG_COLOR_TYPE_RGB_ALPHA, PNG_INTERLACE_NONE,
+         PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
 
   // Set title
   if (title != NULL) {
@@ -270,9 +282,9 @@ void Render(void)
 
   assert(glGetError() == GL_NO_ERROR);
 
-  glClear(GL_COLOR_BUFFER_BIT 
-		  //| GL_DEPTH_BUFFER_BIT
-	  );
+  glClear(GL_COLOR_BUFFER_BIT
+      //| GL_DEPTH_BUFFER_BIT
+    );
   printf("%x\n", glGetError());
   assert(glGetError() == GL_NO_ERROR);
 
