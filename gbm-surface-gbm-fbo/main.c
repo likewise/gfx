@@ -36,7 +36,7 @@ EGLConfig get_config(void)
 
 	EGLConfig *configs = malloc(num_configs * sizeof(EGLConfig));
 	assert(eglChooseConfig(display, egl_config_attribs,
-			       configs, num_configs, &num_configs) == EGL_TRUE);
+				   configs, num_configs, &num_configs) == EGL_TRUE);
 	assert(num_configs);
 	printf("num config %d\n", num_configs);
 
@@ -69,19 +69,27 @@ void RenderTargetInit(void)
 	gbm = gbm_create_device(fd);
 	assert(gbm != NULL);
 
-	assert((display = eglGetPlatformDisplayEXT(EGL_PLATFORM_GBM_MESA, gbm, NULL)) != EGL_NO_DISPLAY);
+		/* create a connection to the native "display", GBM in our case */
+	display = eglGetPlatformDisplayEXT(EGL_PLATFORM_GBM_MESA, gbm, NULL);
+	assert(display != EGL_NO_DISPLAY);
 
 	EGLint majorVersion;
 	EGLint minorVersion;
+	/* initialize EGL display connection */
 	assert(eglInitialize(display, &majorVersion, &minorVersion) == EGL_TRUE);
 
-	assert(eglBindAPI(EGL_OPENGL_ES_API) == EGL_TRUE);
+	EGLint result;
+	result = eglBindAPI(EGL_OPENGL_ES_API);
+	assert(result == EGL_TRUE);
 
 	EGLConfig config = get_config();
 
+	/* GBM surface */
 	gs = gbm_surface_create(
 		gbm, TARGET_SIZE, TARGET_SIZE, GBM_BO_FORMAT_ARGB8888,
-		GBM_BO_USE_LINEAR|GBM_BO_USE_SCANOUT|GBM_BO_USE_RENDERING);
+		GBM_BO_USE_LINEAR/*non-tiled, sub-optimal for performance*/ |
+		GBM_BO_USE_SCANOUT |
+		GBM_BO_USE_RENDERING);
 	assert(gs);
 
 	assert((surface = eglCreatePlatformWindowSurfaceEXT(display, config, gs, NULL)) != EGL_NO_SURFACE);
@@ -207,8 +215,8 @@ int writeImage(char* filename, int width, int height, void *buffer, char* title)
 
 	// Write header (8 bit colour depth)
 	png_set_IHDR(png_ptr, info_ptr, width, height,
-		     8, PNG_COLOR_TYPE_RGB_ALPHA, PNG_INTERLACE_NONE,
-		     PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+			 8, PNG_COLOR_TYPE_RGB_ALPHA, PNG_INTERLACE_NONE,
+			 PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
 
 	// Set title
 	if (title != NULL) {
@@ -243,22 +251,22 @@ void CheckFrameBufferStatus(void)
   status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
   switch(status) {
   case GL_FRAMEBUFFER_COMPLETE:
-    printf("Framebuffer complete\n");
-    break;
+	printf("Framebuffer complete\n");
+	break;
   case GL_FRAMEBUFFER_UNSUPPORTED:
-    printf("Framebuffer unsuported\n");
-    break;
+	printf("Framebuffer unsuported\n");
+	break;
   case GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT:
-    printf("GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT\n");
-    break;
+	printf("GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT\n");
+	break;
   case GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT:
-    printf("GL_FRAMEBUFFER_MISSING_ATTACHMENT\n");
-    break;
+	printf("GL_FRAMEBUFFER_MISSING_ATTACHMENT\n");
+	break;
   case GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS:
-    printf("GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS\n");
-    break;
+	printf("GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS\n");
+	break;
   default:
-    printf("Framebuffer error\n");
+	printf("Framebuffer error\n");
   }
 }
 
@@ -268,18 +276,18 @@ void Render(void)
 	glViewport(0, 0, TARGET_SIZE, TARGET_SIZE);
 
 	//assert(epoxy_has_gl_extension("GL_OES_EGL_image_external"));
-	
+
 	struct gbm_bo *bo = gbm_bo_create(
-		gbm, TARGET_SIZE, TARGET_SIZE, 
+		gbm, TARGET_SIZE, TARGET_SIZE,
 		GBM_FORMAT_ARGB8888,
 		GBM_BO_USE_LINEAR |
 		GBM_BO_USE_RENDERING |
 		GBM_BO_USE_SCANOUT);
 	assert(bo);
 	printf("gbm bo width/stride %d/%d\n",
-	       gbm_bo_get_width(bo),
-	       gbm_bo_get_stride(bo));
-	
+		   gbm_bo_get_width(bo),
+		   gbm_bo_get_stride(bo));
+
 	EGLImageKHR image = eglCreateImageKHR(
 		display, context, EGL_NATIVE_PIXMAP_KHR, bo, NULL);
 	assert(image != EGL_NO_IMAGE_KHR);
@@ -291,7 +299,7 @@ void Render(void)
 	glBindTexture(GL_TEXTURE_2D, texid);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, image);
+	glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, image);
 
 	GLuint fbid;
 	glGenFramebuffers(1, &fbid);
@@ -302,16 +310,24 @@ void Render(void)
 
 	InitGLES("vert.glsl", "frag.glsl");
 
+#if 0
 	GLfloat vertex[] = {
 		-1, -1, 0,
 		-1, 1, 0,
 		1, 1, 0,
 		1, -1, 0
 	};
+#else
+	GLfloat vertex[] = {
+	-0.5f, -0.5f, 0.0f,
+	 0.5f, -0.5f, 0.0f,
+	 0.0f,  0.5f, 0.0f
+	};
+#endif
 
 	GLint position = glGetAttribLocation(program, "positionIn");
-	glEnableVertexAttribArray(position);
 	glVertexAttribPointer(position, 3, GL_FLOAT, 0, 0, vertex);
+	glEnableVertexAttribArray(position);
 	assert(glGetError() == GL_NO_ERROR);
 
 	glClear(GL_COLOR_BUFFER_BIT);
@@ -320,11 +336,13 @@ void Render(void)
 	glDrawArrays(GL_TRIANGLES, 0, 3);
 	assert(glGetError() == GL_NO_ERROR);
 
+
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
 	InitGLES("vert-tex.glsl", "frag-tex.glsl");
 
 	glViewport(0, 0, TARGET_SIZE, TARGET_SIZE);
-        glClear(GL_COLOR_BUFFER_BIT);
+	glClear(GL_COLOR_BUFFER_BIT);
 
 	GLfloat tex[] = {
 		1, 1,
@@ -363,7 +381,7 @@ void Render(void)
 	uint32_t stride;
 	void *map_data;
 	GLubyte *result = gbm_bo_map(bo, 0, 0, TARGET_SIZE, TARGET_SIZE,
-				     GBM_BO_TRANSFER_READ, &stride, &map_data);
+					 GBM_BO_TRANSFER_READ, &stride, &map_data);
 	assert(result);
 	assert(stride == TARGET_SIZE * 4);
 #endif
