@@ -25,13 +25,13 @@ struct gbm_surface *gs;
 static const size_t appWidth = 1920 * 4;
 static const size_t appHeight = 1080 * 4;
 
-static const float rectWidth = 5;
-static const float rectHeight = 20;
+static const float rectWidth = 30;
+static const float rectHeight = 100;
 
 // comment-out to allocate our own FBO -- improves render performance, unknown why yet
 #define USE_EGL_SURFACE
 //#define USE_DYNAMIC_STREAMING
-#define SPRITE_COUNT 2048*8
+#define SPRITE_COUNT 2048*5
 static float gravity = 1.5f;
 
 /* subtracts t2 from t1, the result is in t1
@@ -132,6 +132,9 @@ void RenderTargetInit(void)
   surface = EGL_NO_SURFACE;
   EGLConfig config = NULL;
 
+  /* EGL can work without a native surface; in that case we initialize a
+   * framebuffer object (FBO) ourselves in InitFBO(). In case of an EGL
+   * surface, choose a configuration */
 #ifdef USE_EGL_SURFACE
   config = get_config();
 #endif
@@ -488,12 +491,13 @@ struct particles_t
   size_t count;
 };
 
+/* initialize particle positions, velocities and colours */
 void constructParticles(struct particles_t *particles)
 {
   for (size_t index = 0; index < SPRITE_COUNT; ++index)
   {
-    particles->positionX[index] = appWidth / 2;
-    particles->positionY[index] = appHeight / 2;
+    particles->positionX[index] = random_float(0, appWidth); //appWidth / 2;
+    particles->positionY[index] = random_float(0, appHeight); //appHeight / 2;
     particles->velocityX[index] = random_float(5, 10) * cosf(2 * 3.14 * index / SPRITE_COUNT);
     particles->velocityY[index] = random_float(5, 10) * sinf(2 * 3.14 * index / SPRITE_COUNT);
     particles->colorR[index] = random_float(0, 1);
@@ -503,7 +507,7 @@ void constructParticles(struct particles_t *particles)
   particles->count = SPRITE_COUNT;
 }
 
-
+/* update particle positions */
 void updateParticles(struct particles_t *particles)
 {
   for (size_t index = 0; index < particles->count; ++index)
@@ -652,6 +656,7 @@ void flushBufferData0()
   pVertexColCurrent = pVertexColBufferData;
 }
 
+/* USE_DYNAMIC_STREAMING */
 void flushBufferData1()
 {
   glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(bufferDataIndex * vertPerQuad));
@@ -677,6 +682,7 @@ void Render(void)
   struct particles_t *particles = NULL;
   int rc = posix_memalign((void **)&particles, 32, sizeof(struct particles_t));
   assert(rc == 0);
+
   constructParticles(particles);
 
   CheckFrameBufferStatus();
@@ -696,6 +702,7 @@ void Render(void)
       data[(j * appWidth + i) * 4 + 1] = 32;
       data[(j * appWidth + i) * 4 + 2] = 32;
       data[(j * appWidth + i) * 4 + 3] = 128;
+      if (((i + j) % 8) == 0) data[(j * appWidth + i) * 4 + 3] = 255;
     }
   }
 #endif
@@ -806,50 +813,70 @@ void Render(void)
 
   glClearColor(0, 0, 0, 1);
 
+  renderParticles(particles);
+
   struct timespec ts_start, ts_end;
   rc = clock_gettime(CLOCK_MONOTONIC, &ts_start);
 
-  int frames = 100;
-  printf("Rendering %d frames.\n", frames);
-  while (frames) {
+  int frame = 0;
+  int num_frames = 3000;
+  int endless = 0;
+  //printf("Rendering %d frames.\n", num_frames);
+
+  struct timespec ts_frame_start, ts_frame_end;
+  rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_frame_start);
+
+  while ((frame < num_frames) | endless) {
+
   /* blit a background image */
 #if 1
-  /* read from background texture, draw into surface */
-  glBindFramebuffer(GL_READ_FRAMEBUFFER, fbid);
-  CheckError();
-  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-  CheckError();
-  GLint w = appWidth;
-  GLint h = appHeight;
-  if (frames < 100) {
-    w = h = 200;
-  }
-  /* the read and draw framebuffers are those bound to the
-   * GL_READ_FRAMEBUFFER and GL_DRAW_FRAMEBUFFER targets respectively. */
-  glBlitFramebuffer(
-    0, 0, w, h, /*source rectangle */
-    0, 0, w, h, /*destination rectangle */
-    GL_COLOR_BUFFER_BIT,
-    GL_LINEAR/*no scaling anyway*/);
-  CheckError();
-  //glFinish();
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
-  CheckError();
+    /* read from background texture, draw into surface */
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbid);
+    CheckError();
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    CheckError();
+    /* default, blit whole screen */
+    int blit_count = 1;
+    GLint x = 0;
+    GLint y = 0;
+    GLint w = appWidth;
+    GLint h = appHeight;
+#if 1
+    /* incremental blits */
+    if (frame > 0) {
+      w = h = 400;
+      blit_count = 20;
+    }
+#endif
+    for (int i = 0; i < blit_count; i++) {
+      /* the read and draw framebuffers are those bound to the
+       * GL_READ_FRAMEBUFFER and GL_DRAW_FRAMEBUFFER targets respectively. */
+      glBlitFramebuffer(
+        x, y, x + w, x + h, /*source rectangle */
+        x, y, x + w, x + h, /*destination rectangle */
+        GL_COLOR_BUFFER_BIT,
+        GL_LINEAR/*no scaling anyway*/);
+      CheckError();
+      x += 10;
+      y += 10;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    CheckError();
 #else
     glClear(GL_COLOR_BUFFER_BIT /*| GL_DEPTH_BUFFER_BIT*/);
     CheckError();
 #endif
 
-#if 1
-    /* render */
-    flush();
-#endif
-
-#if 1
+#if 0
     /* update physics */
     updateParticles(particles);
     /* update vertices */
     renderParticles(particles);
+#endif
+
+#if 1
+    /* render */
+    flush();
 #endif
 
     if (surface == EGL_NO_SURFACE) {
@@ -859,7 +886,21 @@ void Render(void)
     } else {
       eglSwapBuffers(display, surface);
     }
-    frames--;
+    frame++;
+
+    rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_frame_end);
+    struct timespec ts_frame_start_next = ts_frame_end;
+    /* subtract the start time from the end time */
+    timespec_sub(&ts_frame_end, &ts_frame_start);
+    ts_frame_start = ts_frame_start_next;
+    if (ts_frame_end.tv_sec > 0) {
+      printf("frame took longer than 1 second?\n");
+    }
+
+    if (!(frame % 60)) {
+      printf("frame %d in %3.2f ms (fps = %3.2f)\n", frame,
+      (float)ts_frame_end.tv_nsec / 1000000.0f, 1000000000.0f / (float)ts_frame_end.tv_nsec);
+    }
   }
 
   rc = clock_gettime(CLOCK_MONOTONIC, &ts_end);
