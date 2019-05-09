@@ -1,11 +1,12 @@
+// clock_gettime >= 199309, posix_memalign >= 200112L
+#define _POSIX_C_SOURCE 200112L //
+
+#include <assert.h> sdss
+#include <fcntl.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <assert.h>
-#include <math.h>
 #include <time.h>
-
-#include <fcntl.h>
-#include <stdlib.h>
 #include <unistd.h>
 
 #include <gbm.h>
@@ -19,6 +20,7 @@ EGLDisplay display;
 EGLSurface surface = EGL_NO_SURFACE;
 EGLContext context;
 struct gbm_device *gbm;
+struct gbm_surface *gs;
 
 static const size_t appWidth = 1920 * 4;
 static const size_t appHeight = 1080 * 4;
@@ -26,8 +28,76 @@ static const size_t appHeight = 1080 * 4;
 static const float rectWidth = 5;
 static const float rectHeight = 20;
 
-#define SPRITE_COUNT 10000
+// comment-out to allocate our own FBO -- improves render performance, unknown why yet
+//#define USE_EGL_SURFACE
+//#define USE_DYNAMIC_STREAMING
+#define SPRITE_COUNT 2048*8
 static float gravity = 1.5f;
+
+/* subtracts t2 from t1, the result is in t1
+ * t1 and t2 should be already normalized, i.e. nsec in [0, 1000000000)
+ */
+static void timespec_sub(struct timespec *t1, const struct timespec *t2)
+{
+  assert(t1->tv_nsec >= 0);
+  assert(t1->tv_nsec < 1000000000);
+  assert(t2->tv_nsec >= 0);
+  assert(t2->tv_nsec < 1000000000);
+  t1->tv_sec -= t2->tv_sec;
+  t1->tv_nsec -= t2->tv_nsec;
+  if (t1->tv_nsec >= 1000000000)
+  {
+    t1->tv_sec++;
+    t1->tv_nsec -= 1000000000;
+  }
+  else if (t1->tv_nsec < 0)
+  {
+    t1->tv_sec--;
+    t1->tv_nsec += 1000000000;
+  }
+}
+
+/* find first EGL configuration offering 32-bit buffer */
+EGLConfig get_config(void)
+{
+  EGLint egl_config_attribs[] = {
+    EGL_BUFFER_SIZE,  32,
+    EGL_DEPTH_SIZE,   EGL_DONT_CARE,
+    EGL_STENCIL_SIZE, EGL_DONT_CARE,
+    EGL_RENDERABLE_TYPE,  EGL_OPENGL_ES2_BIT,
+    EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+    EGL_NONE,
+  };
+
+  EGLint num_configs;
+  assert(eglGetConfigs(display, NULL, 0, &num_configs) == EGL_TRUE);
+  if (num_configs == 0) return 0;
+
+  EGLConfig *configs = malloc(num_configs * sizeof(EGLConfig));
+  assert(eglChooseConfig(display, egl_config_attribs,
+           configs, num_configs, &num_configs) == EGL_TRUE);
+  assert(num_configs);
+  printf("num config %d\n", num_configs);
+
+  // Find a config whose native visual ID is the desired GBM format.
+  for (int i = 0; i < num_configs; ++i) {
+    EGLint gbm_format;
+
+    assert(eglGetConfigAttrib(display, configs[i],
+            EGL_NATIVE_VISUAL_ID, &gbm_format) == EGL_TRUE);
+    printf("gbm format %x\n", gbm_format);
+
+    if (gbm_format == GBM_FORMAT_ARGB8888) {
+      /* copy chosen configuration from the array */
+      EGLConfig ret = configs[i];
+      free(configs);
+      return ret;
+    }
+  }
+
+  // Failed to find a config with matching GBM format.
+  abort();
+}
 
 void RenderTargetInit(void)
 {
@@ -52,6 +122,9 @@ void RenderTargetInit(void)
   egl_rc = eglInitialize(display, &majorVersion, &minorVersion);
   assert(egl_rc == EGL_TRUE);
 
+  char const *egl_extensions = eglQueryString(display, EGL_EXTENSIONS);
+  if (egl_extensions) printf("%s\n", egl_extensions);
+
   egl_rc = eglBindAPI(EGL_OPENGL_ES_API);
   assert(egl_rc == EGL_TRUE);
 
@@ -59,12 +132,29 @@ void RenderTargetInit(void)
   surface = EGL_NO_SURFACE;
   EGLConfig config = NULL;
 
-#if 0
+#ifdef USE_EGL_SURFACE
   config = get_config();
-  if (config) {
-    /* @TODO set surface */
-  }
 #endif
+  if (config) {
+    /* GBM surface */
+    gs = gbm_surface_create(
+      gbm, appWidth, appHeight, GBM_BO_FORMAT_ARGB8888,
+#if 0
+      /* non-tiled, sub-optimal for performance */
+      GBM_BO_USE_LINEAR |
+#endif
+#if 0
+      GBM_BO_USE_SCANOUT |
+#endif
+#if 0
+      GBM_BO_USE_RENDERING |
+#endif
+      0);
+    assert(gs);
+
+    surface = eglCreatePlatformWindowSurfaceEXT(display, config, gs, NULL);
+    assert(surface != EGL_NO_SURFACE);
+  }
 
   const EGLint contextAttribs[] = {
     EGL_CONTEXT_CLIENT_VERSION, 2,
@@ -183,7 +273,6 @@ void CheckError(void)
   assert(error == GL_NO_ERROR);
 }
 
-
 void InitFBO(void)
 {
   struct gbm_bo *bo = gbm_bo_create(gbm, appWidth, appHeight,
@@ -245,10 +334,14 @@ void InitGLES(void)
     exit(1);
   }
 
-  InitFBO();
+  if (surface == EGL_NO_SURFACE) {
+    printf("No native EGL surface, allocating FBO.\n");
+    InitFBO();
+  }
 
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
   glViewport(0, 0, appWidth, appHeight);
 
   //glEnable(GL_DEPTH_TEST);
@@ -332,9 +425,11 @@ float random_float(float min, float max)
 {
   float range = max - min;
   /* obtain random float in range [0.0 - 1.0] */
-  float value = (float)rand() / (float)(RAND_MAX);
+  float value = (float)rand() / ((float)RAND_MAX + 1.0);
   value *= range;
   value += min;
+  value += (float)rand() / ((float)RAND_MAX + 1.0) / ((float)RAND_MAX + 1.0);
+
   return value;
 }
 
@@ -359,10 +454,10 @@ void constructParticles(struct particles_t *particles)
 {
   for (size_t index = 0; index < SPRITE_COUNT; ++index)
   {
-    particles->positionX[index] = 0;
-    particles->positionY[index] = 100;
-    particles->velocityX[index] = random_float(5, 10) * sin((float)index);
-    particles->velocityY[index] = random_float(-5, 10) * sin((float)index);
+    particles->positionX[index] = appWidth / 2;
+    particles->positionY[index] = appHeight / 2;
+    particles->velocityX[index] = random_float(5, 10) * cosf(2 * 3.14 * index / SPRITE_COUNT);
+    particles->velocityY[index] = random_float(5, 10) * sinf(2 * 3.14 * index / SPRITE_COUNT);
     particles->colorR[index] = random_float(0, 1);
     particles->colorG[index] = random_float(0, 1);
     particles->colorB[index] = random_float(0, 1);
@@ -375,23 +470,32 @@ void updateParticles(struct particles_t *particles)
 {
   for (size_t index = 0; index < particles->count; ++index)
   {
-    particles->velocityY[index] += gravity;
+    //particles->velocityY[index] += gravity;
+    float excess;
+
     particles->positionY[index] += particles->velocityY[index];
     particles->positionX[index] += particles->velocityX[index];
 
-    if (particles->positionY[index] > appHeight - 100)
+    excess = particles->positionY[index] - (appHeight - 100);
+    //if (particles->positionY[index] > appHeight - 100)
+    if (excess > 0.0)
     {
-      particles->positionY[index] = appHeight - 100;
-      particles->velocityY[index] *= -1.01f;
+      particles->positionY[index] = (appHeight - 100) - excess;
+      particles->velocityY[index] *= -1.0f;
     }
-    if (particles->positionX[index] > appWidth - 100)
+    excess = particles->positionX[index] - (appWidth - 100);
+    //if (particles->positionX[index] > appWidth - 100)
+    if (excess > 0.0)
     {
-      particles->positionX[index] = appWidth - 100;
+      /* @TODO: physically incorrect, do not bound but mirror */
+      particles->positionX[index] = (appWidth - 100) - excess;
       particles->velocityX[index] *= -1.0f;
     }
-    else if (particles->positionX[index] < 100)
+    excess = 100 - particles->positionX[index];
+    //else if (particles->positionX[index] < 100)
+    if (excess > 0.0)
     {
-      particles->positionX[index] = 100;
+      particles->positionX[index] = 100 + excess;
       particles->velocityX[index] *= -1.0f;
     }
   }
@@ -407,7 +511,7 @@ void setColor(float r, float g, float b)
   colorR = r;
   colorG = g;
   colorB = b;
-  colorA = 1.0f;
+  colorA = 0.8f;
 }
 
 static size_t bufferDataIndex = 0;
@@ -502,6 +606,7 @@ void flushBufferData0()
   CheckError();
   glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float) * bufferDataIndex * vertPerQuad * 4, pVertexColBufferData);
   CheckError();
+
   glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(bufferDataIndex * vertPerQuad));
   CheckError();
   bufferDataIndex = 0;
@@ -509,12 +614,30 @@ void flushBufferData0()
   pVertexColCurrent = pVertexColBufferData;
 }
 
+void flushBufferData1()
+{
+  glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(bufferDataIndex * vertPerQuad));
+  CheckError();
+  bufferDataIndex = 0;
+  pVertexPosCurrent = pVertexPosBufferData;
+  pVertexColCurrent = pVertexColBufferData;
+}
+
+void flush()
+{
+#if defined(USE_DYNAMIC_STREAMING)
+  flushBufferData1();
+#else
+  flushBufferData0();
+#endif
+}
+
 void Render(void)
 {
-//  srand((unsigned int)time(NULL));
+  srand((unsigned int)time(NULL));
 
   struct particles_t *particles = NULL;
-  int rc = posix_memalign(&particles, 32, sizeof(struct particles_t));
+  int rc = posix_memalign((void **)&particles, 32, sizeof(struct particles_t));
   assert(rc == 0);
   constructParticles(particles);
 
@@ -542,6 +665,37 @@ void Render(void)
   size_t vpSize = SPRITE_COUNT * (sizeof(float) * 12);
   size_t vcSize = SPRITE_COUNT * (sizeof(float) * 24);
 
+  /* buffer allocation */
+#if defined(USE_DYNAMIC_STREAMING)
+  GLbitfield mapFlags =
+    GL_MAP_WRITE_BIT |
+    GL_MAP_PERSISTENT_BIT |
+    GL_MAP_COHERENT_BIT;
+  GLbitfield createFlags = mapFlags | GL_DYNAMIC_STORAGE_BIT;
+
+  glBindBuffer(GL_ARRAY_BUFFER, vertexPosVBO);
+  CheckError();
+  glBufferStorage(GL_ARRAY_BUFFER, vpSize, NULL, createFlags);
+  CheckError();
+  glEnableVertexAttribArray(locVertexPos);
+  CheckError();
+  glVertexAttribPointer(locVertexPos, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+  CheckError();
+  pVertexPosBufferData = (GLfloat *)glMapBufferRange(GL_ARRAY_BUFFER, 0, vpSize, mapFlags);
+  pVertexPosCurrent = pVertexPosBufferData;
+
+  glBindBuffer(GL_ARRAY_BUFFER, vertexColVBO);
+  CheckError();
+  glBufferStorage(GL_ARRAY_BUFFER, vcSize, NULL, createFlags);
+  CheckError();
+  glEnableVertexAttribArray(locVertexCol);
+  CheckError();
+  glVertexAttribPointer(locVertexCol, 4, GL_FLOAT, GL_FALSE, 0, NULL);
+  CheckError();
+  pVertexColBufferData = (GLfloat *)glMapBufferRange(GL_ARRAY_BUFFER, 0, vcSize, mapFlags);
+  pVertexColCurrent = pVertexColBufferData;
+
+#else
   pVertexPosBufferData = (GLfloat *)malloc(vpSize);
   assert(pVertexPosBufferData);
   pVertexColBufferData = (GLfloat *)malloc(vcSize);
@@ -550,9 +704,9 @@ void Render(void)
   pVertexColCurrent = pVertexColBufferData;
 
   glBindBuffer(GL_ARRAY_BUFFER, vertexPosVBO);
-  assert(glGetError() == GL_NO_ERROR);
+  CheckError();
   glBufferData(GL_ARRAY_BUFFER, vpSize, NULL, GL_DYNAMIC_DRAW);
-  assert(glGetError() == GL_NO_ERROR);
+  CheckError();
   glEnableVertexAttribArray(locVertexPos);
   glVertexAttribPointer(locVertexPos, 2, GL_FLOAT, GL_FALSE, 0, NULL);
   CheckError();
@@ -564,24 +718,57 @@ void Render(void)
   glEnableVertexAttribArray(locVertexCol);
   glVertexAttribPointer(locVertexCol, 4, GL_FLOAT, GL_FALSE, 0, NULL);
   CheckError();
+#endif
 
   glClearColor(0, 0, 0, 1);
-  int count = 60;
-  while (count--) {
+
+  struct timespec ts_start, ts_end;
+  rc = clock_gettime(CLOCK_MONOTONIC, &ts_start);
+
+  int frames = 100;
+  printf("Rendering %d frames.\n", frames);
+   while (frames--) {
+#if 1
     glClear(GL_COLOR_BUFFER_BIT /*| GL_DEPTH_BUFFER_BIT*/);
     CheckError();
+#endif
 
+#if 1
+    /* render */
+    flush();
+#endif
+
+#if 1
+    /* update physics */
     updateParticles(particles);
+    /* update vertices */
     renderParticles(particles);
-    flushBufferData0();
+#endif
 
-    printf("eglSwapBuffers() %d\n", count);
-    eglSwapBuffers(display, surface);
-    //printf("glFinish() %d\n", count);
-    //glFinish();
+    if (surface == EGL_NO_SURFACE) {
+      /* glFlush() ensures all commands are on the GPU */
+      /* glFinish() ensures all commands are also finished */
+      glFinish();
+    } else {
+      eglSwapBuffers(display, surface);
+    }
   }
+
+  rc = clock_gettime(CLOCK_MONOTONIC, &ts_end);
+  /* subtract the start time from the end time */
+  timespec_sub(&ts_end, &ts_start);
+  printf("CLOCK_MONOTONIC reports %ld.%09ld seconds\n",
+    ts_end.tv_sec, ts_end.tv_nsec);
+
+#ifndef USE_DYNAMIC_STREAMING
+  free(pVertexPosBufferData);
+  free(pVertexColBufferData);
+#endif
+
   glDeleteBuffers(1, &vertexPosVBO);
   glDeleteBuffers(1, &vertexColVBO);
+
+  free(particles); particles = NULL;
 
   GLubyte *result;
   result = malloc(appWidth * appHeight * 4);
