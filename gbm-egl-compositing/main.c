@@ -25,13 +25,14 @@ struct gbm_surface *gs;
 static const size_t appWidth = 1920 * 4;
 static const size_t appHeight = 1080 * 4;
 
-static const float rectWidth = 30;
-static const float rectHeight = 100;
+static const float rectWidth = 20;
+static const float rectHeight = 50;
 
 // comment-out to allocate our own FBO -- improves render performance, unknown why yet
 #define USE_EGL_SURFACE
 //#define USE_DYNAMIC_STREAMING
-#define SPRITE_COUNT 2048*5
+#define SPRITE_COUNT 2048*8
+//2048*5
 static float gravity = 1.5f;
 
 /* subtracts t2 from t1, the result is in t1
@@ -258,10 +259,10 @@ void CheckFrameBufferStatus(void)
   status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
   switch(status) {
   case GL_FRAMEBUFFER_COMPLETE:
-    printf("Framebuffer complete\n");
+    printf("GL_FRAMEBUFFER_COMPLETE\n");
     break;
   case GL_FRAMEBUFFER_UNSUPPORTED:
-    printf("Framebuffer unsupported\n");
+    printf("GL_FRAMEBUFFER_UNSUPPORTED\n");
     break;
   case GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT:
     printf("GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT\n");
@@ -273,11 +274,14 @@ void CheckFrameBufferStatus(void)
     printf("GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS\n");
     break;
   default:
-    printf("Framebuffer error\n");
+    printf("Unknown framebuffer error\n");
   }
 }
 
-void CheckError(void)
+/* a macro, such that the line number corresponds in the assertion */
+#define CheckError(x) do { assert(_CheckError() == GL_NO_ERROR); } while (0)
+
+GLenum _CheckError(void)
 {
   GLenum error;
   error = glGetError();
@@ -288,30 +292,30 @@ void CheckError(void)
     printf("Framebuffer unsupported\n");
     break;
   case GL_INVALID_ENUM:
-    printf("An unacceptable value is specified for an enumerated argument. The offending command is ignored and has no other side effect than to set the error flag.\n");
+    printf("GL_INVALID_ENUM: An unacceptable value is specified for an enumerated argument. The offending command is ignored and has no other side effect than to set the error flag.\n");
     break;
   case GL_INVALID_VALUE:
-    printf("A numeric argument is out of range. The offending command is ignored and has no other side effect than to set the error flag.\n");
+    printf("GL_INVALID_VALUE: A numeric argument is out of range. The offending command is ignored and has no other side effect than to set the error flag.\n");
     break;
   case GL_INVALID_OPERATION:
-    printf("The specified operation is not allowed in the current state. The offending command is ignored and has no other side effect than to set the error flag.\n");
+    printf("GL_INVALID_OPERATION: The specified operation is not allowed in the current state. The offending command is ignored and has no other side effect than to set the error flag.\n");
     break;
   case GL_INVALID_FRAMEBUFFER_OPERATION:
-    printf("The framebuffer object is not complete. The offending command is ignored and has no other side effect than to set the error flag.\n");
+    printf("GL_INVALID_FRAMEBUFFER_OPERATION: The framebuffer object is not complete. The offending command is ignored and has no other side effect than to set the error flag.\n");
     break;
   case GL_OUT_OF_MEMORY:
-    printf("There is not enough memory left to execute the command. The state of the GL is undefined, except for the state of the error flags, after this error is recorded.\n");
+    printf("GL_OUT_OF_MEMORY: There is not enough memory left to execute the command. The state of the GL is undefined, except for the state of the error flags, after this error is recorded.\n");
     break;
   case GL_STACK_UNDERFLOW:
-    printf("An attempt has been made to perform an operation that would cause an internal stack to underflow.\n");
+    printf("GL_STACK_UNDERFLOW: An attempt has been made to perform an operation that would cause an internal stack to underflow.\n");
     break;
   case GL_STACK_OVERFLOW:
-    printf("An attempt has been made to perform an operation that would cause an internal stack to overflow. \n");
+    printf("GL_STACK_OVERFLOW: An attempt has been made to perform an operation that would cause an internal stack to overflow. \n");
     break;
   default:
     printf("Unknown error\n");
   }
-  assert(error == GL_NO_ERROR);
+  return error;
 }
 
 void InitFBO(void)
@@ -380,8 +384,12 @@ void InitGLES(void)
     InitFBO();
   }
 
+#if 0
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+#else
+  glDisable(GL_BLEND);
+#endif
 
   glViewport(0, 0, appWidth, appHeight);
 
@@ -462,6 +470,61 @@ int writeImage(char* filename, int width, int height, void *buffer, char* title)
   return code;
 }
 
+void *readImage(char *filename, int *width, int *height)
+{
+  char header[8];    // 8 is the maximum size that can be checked
+
+  /* open file and test for it being a png */
+  FILE *fp = fopen(filename, "rb");
+  assert(fp);
+  fread(header, 1, 8, fp);
+  assert(!png_sig_cmp(header, 0, 8));
+
+  /* initialize stuff */
+  png_structp png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+  assert(png_ptr);
+
+  png_infop info_ptr = png_create_info_struct(png_ptr);
+  assert(info_ptr);
+
+  assert(!setjmp(png_jmpbuf(png_ptr)));
+
+  png_init_io(png_ptr, fp);
+  png_set_sig_bytes(png_ptr, 8);
+
+  png_read_info(png_ptr, info_ptr);
+
+  *width = png_get_image_width(png_ptr, info_ptr);
+  *height = png_get_image_height(png_ptr, info_ptr);
+  int color_type = png_get_color_type(png_ptr, info_ptr);
+  assert(color_type == PNG_COLOR_TYPE_RGBA);
+  int bit_depth = png_get_bit_depth(png_ptr, info_ptr);
+  assert(bit_depth == 8);
+  int pitch = png_get_rowbytes(png_ptr, info_ptr);
+
+  int number_of_passes = png_set_interlace_handling(png_ptr);
+  png_read_update_info(png_ptr, info_ptr);
+
+  /* read file */
+  assert(!setjmp(png_jmpbuf(png_ptr)));
+
+  png_bytep buffer = malloc(*height * pitch);
+  void *ret = buffer;
+  assert(buffer);
+  png_bytep *row_pointers = malloc(sizeof(png_bytep) * *height);
+  assert(row_pointers);
+  for (int i = 0; i < *height; i++) {
+    row_pointers[i] = buffer;
+    buffer += pitch;
+  }
+
+  png_read_image(png_ptr, row_pointers);
+
+  fclose(fp);
+  free(row_pointers);
+  return ret;
+}
+
 float random_float(float min, float max)
 {
   float range = max - min;
@@ -488,6 +551,7 @@ struct particles_t
   float colorR[SPRITE_COUNT];
   float colorG[SPRITE_COUNT];
   float colorB[SPRITE_COUNT];
+  float colorA[SPRITE_COUNT];
   size_t count;
 };
 
@@ -503,8 +567,11 @@ void constructParticles(struct particles_t *particles)
     particles->colorR[index] = random_float(0, 1);
     particles->colorG[index] = random_float(0, 1);
     particles->colorB[index] = random_float(0, 1);
+    particles->colorA[index] = random_float(0.5, 1);
   }
   particles->count = SPRITE_COUNT;
+  particles->positionX[0] = 0;
+  particles->positionY[0] = 0;
 }
 
 /* update particle positions */
@@ -548,12 +615,12 @@ static float colorG = 1.0f;
 static float colorB = 1.0f;
 static float colorA = 1.0f;
 
-void setColor(float r, float g, float b)
+void setColor(float r, float g, float b, float a)
 {
   colorR = r;
   colorG = g;
   colorB = b;
-  colorA = 0.8f;
+  colorA = a;
 }
 
 static size_t bufferDataIndex = 0;
@@ -617,17 +684,20 @@ void drawRect(float x, float y, float width, float height)
   pVertexColCurrent[22] = colorB;
   pVertexColCurrent[23] = colorA;
 
+  /* two triangles, each with three vertices, two components (XY) per vertex: 2*3*2=12 */
   pVertexPosCurrent = (float *)((char *)pVertexPosCurrent + (sizeof(float) * 12));
+  /* two triangles of three vertices each, four components (RGBA) per vertex: 2*3*4=24 */
   pVertexColCurrent = (float *)((char *)pVertexColCurrent + (sizeof(float) * 24));
-
+  /* increment amount of rectangles */
   bufferDataIndex++;
 }
 
-void renderParticles(struct particles_t* particles)
+/* convert particles into an OpenGL attribute arrays */
+void tesselateParticals(struct particles_t* particles)
 {
   for (size_t index = 0; index < particles->count; ++index)
   {
-    setColor(particles->colorR[index], particles->colorG[index], particles->colorB[index]);
+    setColor(particles->colorR[index], particles->colorG[index], particles->colorB[index], particles->colorA[index]);
     drawRect(particles->positionX[index], particles->positionY[index], rectWidth, rectHeight);
   }
 }
@@ -638,7 +708,7 @@ static GLuint locVertexPos;
 static GLuint locVertexCol;
 static GLbitfield allocFlag;
 
-void flushBufferData0()
+void flushBufferData()
 {
   glBindBuffer(GL_ARRAY_BUFFER, vertexPosVBO);
   CheckError();
@@ -648,37 +718,31 @@ void flushBufferData0()
   CheckError();
   glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float) * bufferDataIndex * vertPerQuad * 4, pVertexColBufferData);
   CheckError();
-
-  glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(bufferDataIndex * vertPerQuad));
-  CheckError();
-  bufferDataIndex = 0;
-  pVertexPosCurrent = pVertexPosBufferData;
-  pVertexColCurrent = pVertexColBufferData;
 }
 
 /* USE_DYNAMIC_STREAMING */
-void flushBufferData1()
+void commitDraw()
 {
-  glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(bufferDataIndex * vertPerQuad));
+  glDrawArrays(GL_TRIANGLES, 0/*first*/, (GLsizei)(bufferDataIndex * vertPerQuad));
   CheckError();
   bufferDataIndex = 0;
   pVertexPosCurrent = pVertexPosBufferData;
   pVertexColCurrent = pVertexColBufferData;
 }
 
-void flush()
+void flushAndCommit()
 {
-#if defined(USE_DYNAMIC_STREAMING)
-  flushBufferData1();
-#else
-  flushBufferData0();
+#if !defined(USE_DYNAMIC_STREAMING)
+  flushBufferData();
 #endif
+  commitDraw();
 }
 
 void Render(void)
 {
   srand((unsigned int)time(NULL));
 
+  /* particle state - each particle is a coloured rectangle */
   struct particles_t *particles = NULL;
   int rc = posix_memalign((void **)&particles, 32, sizeof(struct particles_t));
   assert(rc == 0);
@@ -689,11 +753,15 @@ void Render(void)
 
   /* read RGBA into texture */
   uint8_t *data = NULL;
-#if 0
-  /* @TODO probably need to assert (w==appWidth) && (h==appHeight)
-   * or either set the latter from the PNG very early before appWidth/Height are used */
-  data = readImage("crate-base.png", &w, &h);
+
+  /* used to verify correct alpha blending */
+#if 1
+  int w, h;
+  data = readImage("AlphaBall.png", &w, &h);
+  //assert(w == appWidth);
+  //assert(h == appHeight);
 #else
+  /* generate synthetic background */
   data = malloc(appWidth * appHeight * 4);
   assert(data);
   for (int i = 0; i < appWidth; i++) {
@@ -701,10 +769,15 @@ void Render(void)
       data[(j * appWidth + i) * 4 + 0] = 128;
       data[(j * appWidth + i) * 4 + 1] = 32;
       data[(j * appWidth + i) * 4 + 2] = 32;
-      data[(j * appWidth + i) * 4 + 3] = 128;
-      if (((i + j) % 8) == 0) data[(j * appWidth + i) * 4 + 3] = 255;
+      data[(j * appWidth + i) * 4 + 3] = 255;
+      if (((i + j) % 8) == 0) data[(j * appWidth + i) * 4 + 3] = 128;
     }
   }
+  /* Red pixel */
+  data[(0 * appWidth + 0) * 4 + 0] = 255;
+  data[(0 * appWidth + 0) * 4 + 1] = 0;
+  data[(0 * appWidth + 0) * 4 + 2] = 0;
+  data[(0 * appWidth + 0) * 4 + 3] = 255;
 #endif
 
   glActiveTexture(GL_TEXTURE0);
@@ -713,45 +786,69 @@ void Render(void)
   GLuint texid = 0;
   glGenTextures(1, &texid);
   glBindTexture(GL_TEXTURE_2D, texid);
-#if 0
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-#endif
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, appWidth, appHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w/*appWidth*/, h/*appHeight*/, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
   CheckError();
 
+#if 0
   /* create a framebuffer with the texture as color attachment */
   GLuint fbid;
   glGenFramebuffers(1, &fbid);
   glBindFramebuffer(GL_FRAMEBUFFER, fbid);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texid, 0);
   CheckError();
+#endif
 
 #ifndef USE_EGL_SURFACE
 #error "Need to bind to the InitFBO framebuffer here."
 #endif
   glBindFramebuffer(GL_FRAMEBUFFER, 0/*default framebuffer*/);
 
-  // Setup 2D orthographic matrix view
+  /* Setup 2D orthographic matrix view
+   * scalex, 0,      0,      translatex,
+   * 0,      scaley, 0,      translatey,
+   * 0,      0,      scalez, translatez,
+   * 0,      0,      0,      1
+   */
   GLint locOrthoView = glGetUniformLocation(program, "orthoView");
   GLfloat ortho2D[16] = {
-      2.0f / appWidth, 0, 0, 0,
-      0, -2.0f / appHeight, 0, 0,
-      0, 0, 1.0f, 1.0f,
-      -1.0f, 1.0f, 0, 0
+      2.0f / appWidth,                 0,    0, 0,
+      0,               -2.0f / appHeight,    0, 0,
+      0,                               0, 1.0f, 1.0f,
+      -1,                           1.0f,    0, 0
   };
   glUniformMatrix4fv(locOrthoView, 1, GL_FALSE, ortho2D);
 
   GLint locVertexPos = glGetAttribLocation(program, "inVertexPos");
   GLint locVertexCol = glGetAttribLocation(program, "inVertexCol");
 
+#if 0
+  GLfloat tex[] = {
+    1, 1,
+    1, 0,
+    0, 0,
+    0, 1,
+  };
+
+  GLint locTexCoord = glGetAttribLocation(program, "inTexCoord");
+  glEnableVertexAttribArray(locTexCoord);
+  glVertexAttribPointer(locTexCoord, 2, GL_FLOAT, 0, 0, tex);
+#endif
+
+#if 1
+  /* pass texture unit to the sampler in the fragment shader */
+  GLint locTexId = glGetUniformLocation(program, "texId");
+  glUniform1i(locTexId, 0/*GL_TEXTURE0*/);
+#endif
+
   // Generate and Allocate Buffers
   glGenBuffers(1, &vertexPosVBO);
-  assert(glGetError() == GL_NO_ERROR);
+  CheckError();
   glGenBuffers(1, &vertexColVBO);
-  assert(glGetError() == GL_NO_ERROR);
+  CheckError();
 
   size_t vpSize = SPRITE_COUNT * (sizeof(float) * 12);
   size_t vcSize = SPRITE_COUNT * (sizeof(float) * 24);
@@ -798,10 +895,11 @@ void Render(void)
   CheckError();
   glBufferData(GL_ARRAY_BUFFER, vpSize, NULL, GL_DYNAMIC_DRAW);
   CheckError();
+  printf("GL_MAX_VERTEX_ATTRIBS=%d\n", (int) GL_MAX_VERTEX_ATTRIBS);
   glEnableVertexAttribArray(locVertexPos);
   glVertexAttribPointer(locVertexPos, 2, GL_FLOAT, GL_FALSE, 0, NULL);
   CheckError();
-
+#  if 1
   glBindBuffer(GL_ARRAY_BUFFER, vertexColVBO);
   CheckError();
   glBufferData(GL_ARRAY_BUFFER, vcSize, NULL, GL_DYNAMIC_DRAW);
@@ -809,27 +907,58 @@ void Render(void)
   glEnableVertexAttribArray(locVertexCol);
   glVertexAttribPointer(locVertexCol, 4, GL_FLOAT, GL_FALSE, 0, NULL);
   CheckError();
+#  endif
 #endif
 
+  /* initialize framebuffer to opaque black */
   glClearColor(0, 0, 0, 1);
+  glClear(GL_COLOR_BUFFER_BIT /*| GL_DEPTH_BUFFER_BIT*/);
 
-  renderParticles(particles);
+  //tesselateParticals(particles);
 
+  /* blit texture (background) into framebuffer */
+#if 0
+  /* read from background texture, draw into surface */
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, fbid);
+  CheckError();
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+  CheckError();
+  /* the read and draw framebuffers are those bound to the
+   * GL_READ_FRAMEBUFFER and GL_DRAW_FRAMEBUFFER targets respectively. */
+  glBlitFramebuffer(
+    0, 0, appWidth, appHeight, /*source rectangle */
+    0, 0, appWidth, appHeight, /*destination rectangle */
+    GL_COLOR_BUFFER_BIT,
+    GL_LINEAR/*no scaling anyway*/);
+  CheckError();
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  CheckError();
+#endif
+
+  /* draw a full screen rectangle first */
+  bufferDataIndex = 0;
+  pVertexPosCurrent = pVertexPosBufferData;
+  pVertexColCurrent = pVertexColBufferData;
+
+  setColor(0.0f, 0.0f, 0.0f, 0.0f);
+  drawRect(0, 0, appWidth, appHeight);
+
+  /* total time */
   struct timespec ts_start, ts_end;
-  rc = clock_gettime(CLOCK_MONOTONIC, &ts_start);
+  /* frame time; note that frame N-1 end time is frame N start time exactly */
+  struct timespec ts_frame_start, ts_frame_end;
+  rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_start);
+  ts_frame_start = ts_start;
 
   int frame = 0;
-  int num_frames = 3000;
+  int num_frames = 61;
   int endless = 0;
   //printf("Rendering %d frames.\n", num_frames);
-
-  struct timespec ts_frame_start, ts_frame_end;
-  rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_frame_start);
 
   while ((frame < num_frames) | endless) {
 
   /* blit a background image */
-#if 1
+#if 0
     /* read from background texture, draw into surface */
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fbid);
     CheckError();
@@ -862,21 +991,23 @@ void Render(void)
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     CheckError();
-#else
+#elif 0
     glClear(GL_COLOR_BUFFER_BIT /*| GL_DEPTH_BUFFER_BIT*/);
     CheckError();
 #endif
 
-#if 0
-    /* update physics */
-    updateParticles(particles);
-    /* update vertices */
-    renderParticles(particles);
+#if 1
+    /* flush buffers and commit drawing instructions to GPU */
+    flushAndCommit();
 #endif
 
+#if 0
+    /* update positions */
+    updateParticles(particles);
+#endif
 #if 1
-    /* render */
-    flush();
+    /* update vertices */
+    tesselateParticals(particles);
 #endif
 
     if (surface == EGL_NO_SURFACE) {
@@ -886,7 +1017,6 @@ void Render(void)
     } else {
       eglSwapBuffers(display, surface);
     }
-    frame++;
 
     rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_frame_end);
     struct timespec ts_frame_start_next = ts_frame_end;
@@ -901,6 +1031,7 @@ void Render(void)
       printf("frame %d in %3.2f ms (fps = %3.2f)\n", frame,
       (float)ts_frame_end.tv_nsec / 1000000.0f, 1000000000.0f / (float)ts_frame_end.tv_nsec);
     }
+    frame++;
   }
 
   rc = clock_gettime(CLOCK_MONOTONIC, &ts_end);
@@ -926,7 +1057,7 @@ void Render(void)
   glFinish();
   printf("glReadPixels()\n");
   glReadPixels(0, 0, appWidth, appHeight, GL_RGBA, GL_UNSIGNED_BYTE, result);
-  assert(glGetError() == GL_NO_ERROR);
+  CheckError();
   printf("writeImage()\n");
   assert(!writeImage("screenshot.png", appWidth, appHeight, result, "hello"));
 }
@@ -938,5 +1069,3 @@ int main(void)
   Render();
   return 0;
 }
-
-
