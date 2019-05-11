@@ -22,18 +22,22 @@ EGLContext context;
 struct gbm_device *gbm;
 struct gbm_surface *gs;
 
+// comment-out to allocate our own FBO -- improves render performance, unknown why yet
+#define USE_EGL_SURFACE
+#define USE_DYNAMIC_STREAMING
+#define MAX_METERS 512
+#define MAX_RECTS (MAX_METERS * 4)
+
 static const size_t appWidth = 1920 * 4;
 static const size_t appHeight = 1080 * 4;
 
-static const float rectWidth = 20;
-static const float rectHeight = 50;
+#define NUM_BUFS 3
+int buf_id = 0;
 
-// comment-out to allocate our own FBO -- improves render performance, unknown why yet
-#define USE_EGL_SURFACE
-//#define USE_DYNAMIC_STREAMING
-#define SPRITE_COUNT 2048*8
-//2048*5
-static float gravity = 1.5f;
+/* two triangles, each three vertices, each two coordinates */
+size_t vertexPosSize = MAX_RECTS * (sizeof(float) * 12);
+/* two triangles, each three vertices, each four colour components */
+size_t vertexColSize = MAX_RECTS * (sizeof(float) * 24);
 
 /* subtracts t2 from t1, the result is in t1
  * t1 and t2 should be already normalized, i.e. nsec in [0, 1000000000)
@@ -533,80 +537,127 @@ float random_float(float min, float max)
   value *= range;
   value += min;
   value += (float)rand() / ((float)RAND_MAX + 1.0) / ((float)RAND_MAX + 1.0);
-
   return value;
 }
 
-struct particles_t
+struct Meters_t
 {
    __attribute__((aligned(32)))
-  float positionX[SPRITE_COUNT];
+  float positionX[MAX_RECTS];
    __attribute__((aligned(32)))
-  float positionY[SPRITE_COUNT];
+  float positionY[MAX_RECTS];
    __attribute__((aligned(32)))
-  float velocityX[SPRITE_COUNT];
+  float sizeX[MAX_RECTS];
    __attribute__((aligned(32)))
-  float velocityY[SPRITE_COUNT];
+  float sizeY[MAX_RECTS];
 
-  float colorR[SPRITE_COUNT];
-  float colorG[SPRITE_COUNT];
-  float colorB[SPRITE_COUNT];
-  float colorA[SPRITE_COUNT];
+   __attribute__((aligned(32)))
+  float volume[MAX_RECTS];
+
+  float colorR[MAX_RECTS];
+  float colorG[MAX_RECTS];
+  float colorB[MAX_RECTS];
+  float colorA[MAX_RECTS];
   size_t count;
 };
 
-/* initialize particle positions, velocities and colours */
-void constructParticles(struct particles_t *particles)
+/* what percentage of pixels represent VU meters? */
+#define VU_COVERAGE 50
+#define VU_ROWS 4
+#define HOR_METERS (MAX_METERS/VU_ROWS)
+// 2 rectangles per meter
+// percentage of what is available
+#define VU_WIDTH (VU_COVERAGE * (appWidth/HOR_METERS) / 100)
+#define VU_STRIDE (appWidth/HOR_METERS)
+
+#define TICK_HEIGHT (VU_WIDTH/2)
+
+#define VU_HEIGHT ((appHeight/VU_ROWS) - appHeight/10)
+
+/* initialize meter positions, velocities and colours */
+void constructMeters(struct Meters_t *Meters)
 {
-  for (size_t index = 0; index < SPRITE_COUNT; ++index)
+  for (size_t index = 0; index < MAX_RECTS; index++)
   {
-    particles->positionX[index] = random_float(0, appWidth); //appWidth / 2;
-    particles->positionY[index] = random_float(0, appHeight); //appHeight / 2;
-    particles->velocityX[index] = random_float(5, 10) * cosf(2 * 3.14 * index / SPRITE_COUNT);
-    particles->velocityY[index] = random_float(5, 10) * sinf(2 * 3.14 * index / SPRITE_COUNT);
-    particles->colorR[index] = random_float(0, 1);
-    particles->colorG[index] = random_float(0, 1);
-    particles->colorB[index] = random_float(0, 1);
-    particles->colorA[index] = random_float(0.5, 1);
+    Meters->positionX[index] = 0;
+    Meters->positionY[index] = 0;
+    Meters->sizeX[index] = 0;
+    Meters->sizeY[index] = 0;
   }
-  particles->count = SPRITE_COUNT;
-  particles->positionX[0] = 0;
-  particles->positionY[0] = 0;
+  printf("VU_STRIDE=%d\n", (int)VU_STRIDE);
+  for (size_t index = 0; index < MAX_RECTS; index += 4)
+  {
+    Meters->volume[index] = random_float(0, VU_HEIGHT);
+
+    /* volume bar  */
+    Meters->positionX[index] = ((index/VU_ROWS) % HOR_METERS) * VU_STRIDE;
+    Meters->positionY[index] = (index/MAX_METERS) * appHeight / VU_ROWS;
+    Meters->sizeX[index] = VU_WIDTH;
+    Meters->sizeY[index] = Meters->volume[index];
+#if 0
+    printf("%3.2f, %3.2f, %3.2f, %3.2f\n", Meters->positionX[index], Meters->positionY[index],
+      Meters->sizeX[index], Meters->sizeY[index]);
+#endif
+    Meters->colorR[index] = 1.0;
+    Meters->colorG[index] = 1.0;
+    Meters->colorB[index] = 0.0;
+    Meters->colorA[index] = 0.4;
+
+    /* between volume bar and max tick */
+    Meters->positionX[index + 1] = Meters->positionX[index];
+    Meters->positionY[index + 1] = Meters->positionY[index] + Meters->sizeY[index];
+    Meters->sizeX[index + 1] = VU_WIDTH;
+    Meters->sizeY[index + 1] = TICK_HEIGHT;
+
+    Meters->colorR[index + 1] = 0.0;
+    Meters->colorG[index + 1] = 0.0;
+    Meters->colorB[index + 1] = 0.0;
+    Meters->colorA[index + 1] = 0.5;
+
+    /* max hold tick */
+    Meters->positionX[index + 2] = Meters->positionX[index];
+    Meters->positionY[index + 2] = Meters->positionY[index + 1] + Meters->sizeY[index + 1];
+    Meters->sizeX[index + 2] = VU_WIDTH;
+    Meters->sizeY[index + 2] = TICK_HEIGHT;
+
+    Meters->colorR[index + 2] = 1.0;
+    Meters->colorG[index + 2] = 0.0;
+    Meters->colorB[index + 2] = 0.0;
+    Meters->colorA[index + 2] = 0.4;
+
+    /* between max tick and top of meter */
+    Meters->positionX[index + 3] = Meters->positionX[index];
+    Meters->positionY[index + 3] = Meters->positionY[index + 2] + Meters->sizeY[index + 2];
+    Meters->sizeX[index + 3] = VU_WIDTH;
+    Meters->sizeY[index + 3] = VU_HEIGHT - Meters->sizeY[index] - Meters->sizeY[index + 1] - Meters->sizeY[index + 2];
+
+    Meters->colorR[index + 3] = 0.0;
+    Meters->colorG[index + 3] = 0.0;
+    Meters->colorB[index + 3] = 0.0;
+    Meters->colorA[index + 3] = 0.5;
+  }
+  Meters->count = MAX_RECTS;
 }
 
-/* update particle positions */
-void updateParticles(struct particles_t *particles)
+/* update meter positions */
+void updateMeters(struct Meters_t *Meters)
 {
-  for (size_t index = 0; index < particles->count; ++index)
+  for (size_t index = 0; index < Meters->count; index += 4)
   {
-    //particles->velocityY[index] += gravity;
-    float excess;
+    Meters->volume[index] = random_float(0, VU_HEIGHT - 2 * TICK_HEIGHT);
 
-    particles->positionY[index] += particles->velocityY[index];
-    particles->positionX[index] += particles->velocityX[index];
+    /* volume bar  */
+    Meters->sizeY[index] = Meters->volume[index];
 
-    excess = particles->positionY[index] - (appHeight - 100);
-    //if (particles->positionY[index] > appHeight - 100)
-    if (excess > 0.0)
-    {
-      particles->positionY[index] = (appHeight - 100) - excess;
-      particles->velocityY[index] *= -1.0f;
-    }
-    excess = particles->positionX[index] - (appWidth - 100);
-    //if (particles->positionX[index] > appWidth - 100)
-    if (excess > 0.0)
-    {
-      /* @TODO: physically incorrect, do not bound but mirror */
-      particles->positionX[index] = (appWidth - 100) - excess;
-      particles->velocityX[index] *= -1.0f;
-    }
-    excess = 100 - particles->positionX[index];
-    //else if (particles->positionX[index] < 100)
-    if (excess > 0.0)
-    {
-      particles->positionX[index] = 100 + excess;
-      particles->velocityX[index] *= -1.0f;
-    }
+    /* between volume bar and max tick */
+    Meters->positionY[index + 1] = Meters->positionY[index] + Meters->sizeY[index];
+
+    /* max hold tick */
+    Meters->positionY[index + 2] = Meters->positionY[index + 1] + Meters->sizeY[index + 1];
+
+    /* between max tick and top of meter */
+    Meters->positionY[index + 3] = Meters->positionY[index + 2] + Meters->sizeY[index + 2];
+    Meters->sizeY[index + 3] = VU_HEIGHT - Meters->sizeY[index] - Meters->sizeY[index + 1] - Meters->sizeY[index + 2];
   }
 }
 
@@ -623,17 +674,19 @@ void setColor(float r, float g, float b, float a)
   colorA = a;
 }
 
-static size_t bufferDataIndex = 0;
+static size_t numRects = 0;
 static const size_t vertPerQuad = 6;
-static const size_t maxVertices = SPRITE_COUNT * vertPerQuad;
+static const size_t maxVertices = MAX_RECTS * vertPerQuad;
 
 static float *pVertexPosBufferData = NULL;
-static float *pVertexPosCurrent = NULL;
 static float *pVertexColBufferData = NULL;
-static float *pVertexColCurrent = NULL;
 
 void drawRect(float x, float y, float width, float height)
 {
+  /* pointer to float */
+  float *pVertexPosCurrent = pVertexPosBufferData + (buf_id * MAX_RECTS + numRects) * 6 * 2;
+  float *pVertexColCurrent = pVertexColBufferData + (buf_id * MAX_RECTS + numRects) * 6 * 4;
+
   // first triangle
   pVertexPosCurrent[0] = x;
   pVertexPosCurrent[1] = y;
@@ -684,21 +737,16 @@ void drawRect(float x, float y, float width, float height)
   pVertexColCurrent[22] = colorB;
   pVertexColCurrent[23] = colorA;
 
-  /* two triangles, each with three vertices, two components (XY) per vertex: 2*3*2=12 */
-  pVertexPosCurrent = (float *)((char *)pVertexPosCurrent + (sizeof(float) * 12));
-  /* two triangles of three vertices each, four components (RGBA) per vertex: 2*3*4=24 */
-  pVertexColCurrent = (float *)((char *)pVertexColCurrent + (sizeof(float) * 24));
-  /* increment amount of rectangles */
-  bufferDataIndex++;
+  numRects++;
 }
 
-/* convert particles into an OpenGL attribute arrays */
-void tesselateParticals(struct particles_t* particles)
+/* convert Meters into an OpenGL attribute arrays */
+void tesselateParticals(struct Meters_t* Meters)
 {
-  for (size_t index = 0; index < particles->count; ++index)
+  for (size_t index = 0; index < Meters->count; ++index)
   {
-    setColor(particles->colorR[index], particles->colorG[index], particles->colorB[index], particles->colorA[index]);
-    drawRect(particles->positionX[index], particles->positionY[index], rectWidth, rectHeight);
+    setColor(Meters->colorR[index], Meters->colorG[index], Meters->colorB[index], Meters->colorA[index]);
+    drawRect(Meters->positionX[index], Meters->positionY[index], Meters->sizeX[index], Meters->sizeY[index]);
   }
 }
 
@@ -710,24 +758,35 @@ static GLbitfield allocFlag;
 
 void flushBufferData()
 {
+  GLintptr offset;
+  GLsizeiptr amount;
+
   glBindBuffer(GL_ARRAY_BUFFER, vertexPosVBO);
   CheckError();
-  glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float) * bufferDataIndex * vertPerQuad * 2, pVertexPosBufferData);
+  offset = buf_id * MAX_RECTS * 12 * sizeof(float);
+  amount = numRects * 12 * sizeof(float);
+  glBufferSubData(GL_ARRAY_BUFFER, offset, amount, pVertexPosBufferData + offset);
   CheckError();
+
   glBindBuffer(GL_ARRAY_BUFFER, vertexColVBO);
   CheckError();
-  glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float) * bufferDataIndex * vertPerQuad * 4, pVertexColBufferData);
+  offset = buf_id * MAX_RECTS * 24 * sizeof(float);
+  amount = numRects * 24 * sizeof(float);
+  glBufferSubData(GL_ARRAY_BUFFER, offset, amount, pVertexColBufferData + offset);
   CheckError();
+
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 /* USE_DYNAMIC_STREAMING */
 void commitDraw()
 {
-  glDrawArrays(GL_TRIANGLES, 0/*first*/, (GLsizei)(bufferDataIndex * vertPerQuad));
+  GLint first = buf_id * MAX_RECTS * vertPerQuad;
+  glDrawArrays(GL_TRIANGLES, first, (GLsizei)(numRects * vertPerQuad));
   CheckError();
-  bufferDataIndex = 0;
-  pVertexPosCurrent = pVertexPosBufferData;
-  pVertexColCurrent = pVertexColBufferData;
+
+  buf_id = (buf_id + 1) % NUM_BUFS;
+  numRects = 0;
 }
 
 void flushAndCommit()
@@ -742,21 +801,21 @@ void Render(void)
 {
   srand((unsigned int)time(NULL));
 
-  /* particle state - each particle is a coloured rectangle */
-  struct particles_t *particles = NULL;
-  int rc = posix_memalign((void **)&particles, 32, sizeof(struct particles_t));
+  /* meter state - each meter is a coloured rectangle */
+  struct Meters_t *Meters = NULL;
+  int rc = posix_memalign((void **)&Meters, 32, sizeof(struct Meters_t));
   assert(rc == 0);
 
-  constructParticles(particles);
+  constructMeters(Meters);
 
   CheckFrameBufferStatus();
 
   /* read RGBA into texture */
   uint8_t *data = NULL;
 
-  /* used to verify correct alpha blending */
+  /* verify correct alpha blending */
+  int w = appWidth, h = appHeight;
 #if 1
-  int w, h;
   data = readImage("AlphaBall.png", &w, &h);
   //assert(w == appWidth);
   //assert(h == appHeight);
@@ -793,7 +852,7 @@ void Render(void)
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w/*appWidth*/, h/*appHeight*/, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
   CheckError();
 
-#if 0
+#if 1
   /* create a framebuffer with the texture as color attachment */
   GLuint fbid;
   glGenFramebuffers(1, &fbid);
@@ -850,9 +909,6 @@ void Render(void)
   glGenBuffers(1, &vertexColVBO);
   CheckError();
 
-  size_t vpSize = SPRITE_COUNT * (sizeof(float) * 12);
-  size_t vcSize = SPRITE_COUNT * (sizeof(float) * 24);
-
   /* buffer allocation */
 #if defined(USE_DYNAMIC_STREAMING)
   GLbitfield mapFlags =
@@ -863,58 +919,53 @@ void Render(void)
 
   glBindBuffer(GL_ARRAY_BUFFER, vertexPosVBO);
   CheckError();
-  glBufferStorage(GL_ARRAY_BUFFER, vpSize, NULL, createFlags);
+  glBufferStorage(GL_ARRAY_BUFFER, NUM_BUFS * vertexPosSize, NULL, createFlags);
   CheckError();
   glEnableVertexAttribArray(locVertexPos);
   CheckError();
+  /* glVertexAttribPointer will always use whatever buffer is currently bound to GL_ARRAY_BUFFER */
   glVertexAttribPointer(locVertexPos, 2, GL_FLOAT, GL_FALSE, 0, NULL);
   CheckError();
-  pVertexPosBufferData = (GLfloat *)glMapBufferRange(GL_ARRAY_BUFFER, 0, vpSize, mapFlags);
-  pVertexPosCurrent = pVertexPosBufferData;
+  pVertexPosBufferData = (GLfloat *)glMapBufferRange(GL_ARRAY_BUFFER, 0, NUM_BUFS * vertexPosSize, mapFlags);
 
   glBindBuffer(GL_ARRAY_BUFFER, vertexColVBO);
   CheckError();
-  glBufferStorage(GL_ARRAY_BUFFER, vcSize, NULL, createFlags);
+  glBufferStorage(GL_ARRAY_BUFFER, NUM_BUFS * vertexColSize, NULL, createFlags);
   CheckError();
   glEnableVertexAttribArray(locVertexCol);
   CheckError();
   glVertexAttribPointer(locVertexCol, 4, GL_FLOAT, GL_FALSE, 0, NULL);
   CheckError();
-  pVertexColBufferData = (GLfloat *)glMapBufferRange(GL_ARRAY_BUFFER, 0, vcSize, mapFlags);
-  pVertexColCurrent = pVertexColBufferData;
+  pVertexColBufferData = (GLfloat *)glMapBufferRange(GL_ARRAY_BUFFER, 0, NUM_BUFS * vertexColSize, mapFlags);
 
 #else
-  pVertexPosBufferData = (GLfloat *)malloc(vpSize);
+  pVertexPosBufferData = (GLfloat *)malloc(NUM_BUFS * vertexPosSize);
   assert(pVertexPosBufferData);
-  pVertexColBufferData = (GLfloat *)malloc(vcSize);
+  pVertexColBufferData = (GLfloat *)malloc(NUM_BUFS * vertexColSize);
   assert(pVertexColBufferData);
-  pVertexPosCurrent = pVertexPosBufferData;
-  pVertexColCurrent = pVertexColBufferData;
 
   glBindBuffer(GL_ARRAY_BUFFER, vertexPosVBO);
   CheckError();
-  glBufferData(GL_ARRAY_BUFFER, vpSize, NULL, GL_DYNAMIC_DRAW);
+  glBufferData(GL_ARRAY_BUFFER, NUM_BUFS * vertexPosSize, NULL, GL_DYNAMIC_DRAW);
   CheckError();
-  printf("GL_MAX_VERTEX_ATTRIBS=%d\n", (int) GL_MAX_VERTEX_ATTRIBS);
+  //printf("GL_MAX_VERTEX_ATTRIBS=%d\n", (int) GL_MAX_VERTEX_ATTRIBS);
   glEnableVertexAttribArray(locVertexPos);
   glVertexAttribPointer(locVertexPos, 2, GL_FLOAT, GL_FALSE, 0, NULL);
   CheckError();
-#  if 1
   glBindBuffer(GL_ARRAY_BUFFER, vertexColVBO);
   CheckError();
-  glBufferData(GL_ARRAY_BUFFER, vcSize, NULL, GL_DYNAMIC_DRAW);
+  glBufferData(GL_ARRAY_BUFFER, NUM_BUFS * vertexColSize, NULL, GL_DYNAMIC_DRAW);
   CheckError();
   glEnableVertexAttribArray(locVertexCol);
   glVertexAttribPointer(locVertexCol, 4, GL_FLOAT, GL_FALSE, 0, NULL);
   CheckError();
-#  endif
 #endif
 
   /* initialize framebuffer to opaque black */
   glClearColor(0, 0, 0, 1);
   glClear(GL_COLOR_BUFFER_BIT /*| GL_DEPTH_BUFFER_BIT*/);
 
-  //tesselateParticals(particles);
+  //tesselateParticals(Meters);
 
   /* blit texture (background) into framebuffer */
 #if 0
@@ -936,12 +987,12 @@ void Render(void)
 #endif
 
   /* draw a full screen rectangle first */
-  bufferDataIndex = 0;
-  pVertexPosCurrent = pVertexPosBufferData;
-  pVertexColCurrent = pVertexColBufferData;
+  numRects = 0;
 
   setColor(0.0f, 0.0f, 0.0f, 0.0f);
   drawRect(0, 0, appWidth, appHeight);
+
+  struct timespec ts_action_start, ts_action_end;
 
   /* total time */
   struct timespec ts_start, ts_end;
@@ -951,7 +1002,7 @@ void Render(void)
   ts_frame_start = ts_start;
 
   int frame = 0;
-  int num_frames = 61;
+  int num_frames = 21;
   int endless = 0;
   //printf("Rendering %d frames.\n", num_frames);
 
@@ -970,7 +1021,7 @@ void Render(void)
     GLint y = 0;
     GLint w = appWidth;
     GLint h = appHeight;
-#if 1
+#if 0
     /* incremental blits */
     if (frame > 0) {
       w = h = 400;
@@ -996,20 +1047,30 @@ void Render(void)
     CheckError();
 #endif
 
+    printf("frame %d ", frame);
 #if 1
     /* flush buffers and commit drawing instructions to GPU */
     flushAndCommit();
 #endif
-
-#if 0
-    /* update positions */
-    updateParticles(particles);
-#endif
 #if 1
-    /* update vertices */
-    tesselateParticals(particles);
+    rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_start);
+    /* update positions */
+    updateMeters(Meters);
+    rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_end);
+    timespec_sub(&ts_action_end, &ts_action_start);
+    printf("update %3.2f ms ", (float)ts_action_end.tv_nsec / 1000000.0f);
 #endif
 
+#if 1
+    rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_start);
+     /* update vertices */
+    tesselateParticals(Meters);
+    rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_end);
+    timespec_sub(&ts_action_end, &ts_action_start);
+    printf("tesselate %3.2f ms ", (float)ts_action_end.tv_nsec / 1000000.0f);
+#endif
+
+    rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_start);
     if (surface == EGL_NO_SURFACE) {
       /* glFlush() ensures all commands are on the GPU */
       /* glFinish() ensures all commands are also finished */
@@ -1017,6 +1078,9 @@ void Render(void)
     } else {
       eglSwapBuffers(display, surface);
     }
+    rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_end);
+    timespec_sub(&ts_action_end, &ts_action_start);
+    printf("swap %3.2f ms ", (float)ts_action_end.tv_nsec / 1000000.0f);
 
     rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_frame_end);
     struct timespec ts_frame_start_next = ts_frame_end;
@@ -1026,9 +1090,12 @@ void Render(void)
     if (ts_frame_end.tv_sec > 0) {
       printf("frame took longer than 1 second?\n");
     }
-
-    if (!(frame % 60)) {
-      printf("frame %d in %3.2f ms (fps = %3.2f)\n", frame,
+#if 0
+    if (!(frame % 5)) {
+#else
+    if (1) {
+#endif
+      printf("total %3.2f ms (fps = %3.2f)\n",
       (float)ts_frame_end.tv_nsec / 1000000.0f, 1000000000.0f / (float)ts_frame_end.tv_nsec);
     }
     frame++;
@@ -1048,7 +1115,7 @@ void Render(void)
   glDeleteBuffers(1, &vertexPosVBO);
   glDeleteBuffers(1, &vertexColVBO);
 
-  free(particles); particles = NULL;
+  free(Meters); Meters = NULL;
 
   GLubyte *result;
   result = malloc(appWidth * appHeight * 4);
