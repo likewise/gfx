@@ -25,8 +25,9 @@ struct gbm_surface *gs;
 // comment-out to allocate our own FBO -- improves render performance, unknown why yet
 #define USE_EGL_SURFACE
 #define USE_DYNAMIC_STREAMING
-#define MAX_METERS 512
-#define MAX_RECTS (MAX_METERS * 4)
+#define MAX_METERS 2048
+#define NUM_RECT 4
+#define MAX_RECTS (MAX_METERS * NUM_RECT)
 
 static const size_t appWidth = 1920 * 4;
 static const size_t appHeight = 1080 * 4;
@@ -542,17 +543,24 @@ float random_float(float min, float max)
 
 struct Meters_t
 {
-   __attribute__((aligned(32)))
-  float positionX[MAX_RECTS];
-   __attribute__((aligned(32)))
-  float positionY[MAX_RECTS];
-   __attribute__((aligned(32)))
-  float sizeX[MAX_RECTS];
-   __attribute__((aligned(32)))
-  float sizeY[MAX_RECTS];
+  float volume[MAX_METERS];
+  float prev_volume[MAX_METERS];
+  float hold[MAX_METERS];
+  float prev_hold[MAX_METERS];
+  int hold_time[MAX_METERS];
+  size_t count;
+};
 
+struct Rectangles_t
+{
    __attribute__((aligned(32)))
-  float volume[MAX_RECTS];
+  float X1[MAX_RECTS];
+   __attribute__((aligned(32)))
+  float X2[MAX_RECTS];
+   __attribute__((aligned(32)))
+  float Y1[MAX_RECTS];
+   __attribute__((aligned(32)))
+  float Y2[MAX_RECTS];
 
   float colorR[MAX_RECTS];
   float colorG[MAX_RECTS];
@@ -570,94 +578,124 @@ struct Meters_t
 #define VU_WIDTH (VU_COVERAGE * (appWidth/HOR_METERS) / 100)
 #define VU_STRIDE (appWidth/HOR_METERS)
 
-#define TICK_HEIGHT (VU_WIDTH/2)
+#define VU_TICK_HEIGHT (VU_WIDTH/2)
 
 #define VU_HEIGHT ((appHeight/VU_ROWS) - appHeight/10)
 
-/* initialize meter positions, velocities and colours */
+/* initialize meter positions */
 void constructMeters(struct Meters_t *Meters)
 {
-  for (size_t index = 0; index < MAX_RECTS; index++)
-  {
-    Meters->positionX[index] = 0;
-    Meters->positionY[index] = 0;
-    Meters->sizeX[index] = 0;
-    Meters->sizeY[index] = 0;
-  }
-  printf("VU_STRIDE=%d\n", (int)VU_STRIDE);
-  for (size_t index = 0; index < MAX_RECTS; index += 4)
+  for (size_t index = 0; index < MAX_METERS; index++)
   {
     Meters->volume[index] = random_float(0, VU_HEIGHT);
-
-    /* volume bar  */
-    Meters->positionX[index] = ((index/VU_ROWS) % HOR_METERS) * VU_STRIDE;
-    Meters->positionY[index] = (index/MAX_METERS) * appHeight / VU_ROWS;
-    Meters->sizeX[index] = VU_WIDTH;
-    Meters->sizeY[index] = Meters->volume[index];
-#if 0
-    printf("%3.2f, %3.2f, %3.2f, %3.2f\n", Meters->positionX[index], Meters->positionY[index],
-      Meters->sizeX[index], Meters->sizeY[index]);
-#endif
-    Meters->colorR[index] = 1.0;
-    Meters->colorG[index] = 1.0;
-    Meters->colorB[index] = 0.0;
-    Meters->colorA[index] = 0.4;
-
-    /* between volume bar and max tick */
-    Meters->positionX[index + 1] = Meters->positionX[index];
-    Meters->positionY[index + 1] = Meters->positionY[index] + Meters->sizeY[index];
-    Meters->sizeX[index + 1] = VU_WIDTH;
-    Meters->sizeY[index + 1] = TICK_HEIGHT;
-
-    Meters->colorR[index + 1] = 0.0;
-    Meters->colorG[index + 1] = 0.0;
-    Meters->colorB[index + 1] = 0.0;
-    Meters->colorA[index + 1] = 0.5;
-
-    /* max hold tick */
-    Meters->positionX[index + 2] = Meters->positionX[index];
-    Meters->positionY[index + 2] = Meters->positionY[index + 1] + Meters->sizeY[index + 1];
-    Meters->sizeX[index + 2] = VU_WIDTH;
-    Meters->sizeY[index + 2] = TICK_HEIGHT;
-
-    Meters->colorR[index + 2] = 1.0;
-    Meters->colorG[index + 2] = 0.0;
-    Meters->colorB[index + 2] = 0.0;
-    Meters->colorA[index + 2] = 0.4;
-
-    /* between max tick and top of meter */
-    Meters->positionX[index + 3] = Meters->positionX[index];
-    Meters->positionY[index + 3] = Meters->positionY[index + 2] + Meters->sizeY[index + 2];
-    Meters->sizeX[index + 3] = VU_WIDTH;
-    Meters->sizeY[index + 3] = VU_HEIGHT - Meters->sizeY[index] - Meters->sizeY[index + 1] - Meters->sizeY[index + 2];
-
-    Meters->colorR[index + 3] = 0.0;
-    Meters->colorG[index + 3] = 0.0;
-    Meters->colorB[index + 3] = 0.0;
-    Meters->colorA[index + 3] = 0.5;
+    Meters->prev_volume[index] = 0;
+    Meters->hold[index] = Meters->volume[index];
+    Meters->prev_hold[index] = 0;
+    Meters->hold_time[index] = 0;
   }
-  Meters->count = MAX_RECTS;
 }
 
-/* update meter positions */
+/* initialize meter positions */
 void updateMeters(struct Meters_t *Meters)
 {
-  for (size_t index = 0; index < Meters->count; index += 4)
+  for (size_t index = 0; index < MAX_METERS; index++)
   {
-    Meters->volume[index] = random_float(0, VU_HEIGHT - 2 * TICK_HEIGHT);
+    Meters->prev_volume[index] = Meters->volume[index];
+    Meters->prev_hold[index] = Meters->hold[index];
 
-    /* volume bar  */
-    Meters->sizeY[index] = Meters->volume[index];
+    Meters->volume[index] = random_float(0, VU_HEIGHT);
+    /* keep track of hold tick presence time */
+    Meters->hold_time[index]++;
+    /* after 1 second, fall off hold tick */
+    if (Meters->hold_time[index] > 6) {
+      Meters->hold[index] /= 2;
+    }
+    /* if new maximum volume, reset hold tick */
+    if (Meters->volume[index] >= Meters->hold[index]) {
+      Meters->hold[index] = Meters->volume[index];
+      Meters->hold_time[index] = 0;
+    }
+  }
+}
 
-    /* between volume bar and max tick */
-    Meters->positionY[index + 1] = Meters->positionY[index] + Meters->sizeY[index];
+void updateRectanglesFromMeters(struct Rectangles_t *Rect, struct Meters_t *Meters, int optimize)
+{
+  for (size_t meter = 0, rect = 0; meter < MAX_METERS; meter++)
+  {
+    if (Meters->hold[meter] < Meters->prev_hold[meter]) {
+      /* remove old hold tick, safely assume it is lower */
+      Rect->X1[rect] = (meter % HOR_METERS) * VU_STRIDE;
+      Rect->X2[rect] = (meter % HOR_METERS) * VU_STRIDE + VU_WIDTH;
+      Rect->Y1[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->prev_hold[meter] - VU_TICK_HEIGHT;
+      Rect->Y2[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->prev_hold[meter];
+      Rect->colorR[rect] = 0.0;
+      Rect->colorG[rect] = 0.0;
+      Rect->colorB[rect] = 0.0;
+      Rect->colorA[rect] = 0.5;
+      rect++;
+    }
 
-    /* max hold tick */
-    Meters->positionY[index + 2] = Meters->positionY[index + 1] + Meters->sizeY[index + 1];
+    /* volume bar */
+    Rect->X1[rect] = (meter % HOR_METERS) * VU_STRIDE;
+    Rect->X2[rect] = (meter % HOR_METERS) * VU_STRIDE + VU_WIDTH;
+    Rect->Y1[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS;
+    Rect->Y2[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->volume[meter];
+    Rect->colorR[rect] = 1.0;
+    Rect->colorG[rect] = 1.0;
+    Rect->colorB[rect] = 0.0;
+    Rect->colorA[rect] = 0.0;
 
-    /* between max tick and top of meter */
-    Meters->positionY[index + 3] = Meters->positionY[index + 2] + Meters->sizeY[index + 2];
-    Meters->sizeY[index + 3] = VU_HEIGHT - Meters->sizeY[index] - Meters->sizeY[index + 1] - Meters->sizeY[index + 2];
+    if (optimize) {
+      /* volume bar higher? */
+      if (Meters->volume[meter] > Meters->prev_volume[meter]) {
+        /* draw the volume bar increase only*/
+        Rect->Y1[rect] += Meters->prev_volume[meter];
+      } else if (Meters->volume[meter] <= Meters->prev_volume[meter]) {
+        /* draw nothing */
+        Rect->Y2[rect] = Rect->Y1[rect];
+      }
+      //Rect->colorB[rect] = 1.0;
+    }
+    rect++;
+
+    /* all except volume bar */
+    Rect->X1[rect] = (meter % HOR_METERS) * VU_STRIDE;
+    Rect->X2[rect] = (meter % HOR_METERS) * VU_STRIDE + VU_WIDTH;
+    Rect->Y1[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->volume[meter];
+    Rect->Y2[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + VU_HEIGHT;
+    Rect->colorR[rect] = 0.0;
+    Rect->colorG[rect] = 0.0;
+    Rect->colorB[rect] = 0.0;
+    Rect->colorA[rect] = 0.5;
+
+    if (optimize) {
+      /* volume bar lower ? */
+      if (Meters->volume[meter] < Meters->prev_volume[meter]) {
+        /* draw the volume bar decrease only*/
+        Rect->Y2[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->prev_volume[meter];
+      } else if (Meters->volume[meter] >= Meters->prev_volume[meter]) {
+        /* draw nothing */
+        Rect->Y2[rect] = Rect->Y1[rect];
+      }
+    }
+    rect++;
+
+    /* hold tick */
+    Rect->X1[rect] = (meter % HOR_METERS) * VU_STRIDE;
+    Rect->X2[rect] = (meter % HOR_METERS) * VU_STRIDE + VU_WIDTH;
+    Rect->Y1[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->hold[meter] - VU_TICK_HEIGHT;
+    Rect->Y2[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->hold[meter];
+    Rect->colorR[rect] = 1.0;
+    Rect->colorG[rect] = 0.0;
+    Rect->colorB[rect] = 0.0;
+    Rect->colorA[rect] = 0.5;
+    rect++;
+
+#if 0
+    printf("%3.2f, %3.2f, %3.2f, %3.2f\n", Rect->positionX[index], Rect->positionY[index],
+      Rect->sizeX[index], Rect->sizeY[index]);
+#endif
+    Rect->count = rect;
   }
 }
 
@@ -681,26 +719,26 @@ static const size_t maxVertices = MAX_RECTS * vertPerQuad;
 static float *pVertexPosBufferData = NULL;
 static float *pVertexColBufferData = NULL;
 
-void drawRect(float x, float y, float width, float height)
+void drawRect(float x1, float y1, float x2, float y2)
 {
   /* pointer to float */
   float *pVertexPosCurrent = pVertexPosBufferData + (buf_id * MAX_RECTS + numRects) * 6 * 2;
   float *pVertexColCurrent = pVertexColBufferData + (buf_id * MAX_RECTS + numRects) * 6 * 4;
 
   // first triangle
-  pVertexPosCurrent[0] = x;
-  pVertexPosCurrent[1] = y;
-  pVertexPosCurrent[2] = x + width;
-  pVertexPosCurrent[3] = y + height;
-  pVertexPosCurrent[4] = x;
-  pVertexPosCurrent[5] = y + height;
+  pVertexPosCurrent[ 0] = x1;
+  pVertexPosCurrent[ 1] = y1;
+  pVertexPosCurrent[ 2] = x2;
+  pVertexPosCurrent[ 3] = y2;
+  pVertexPosCurrent[ 4] = x1;
+  pVertexPosCurrent[ 5] = y2;
   // second triangle
-  pVertexPosCurrent[6] = x;
-  pVertexPosCurrent[7] = y;
-  pVertexPosCurrent[8] = x + width;
-  pVertexPosCurrent[9] = y;
-  pVertexPosCurrent[10] = x + width;
-  pVertexPosCurrent[11] = y + height;
+  pVertexPosCurrent[ 6] = x1;
+  pVertexPosCurrent[ 7] = y1;
+  pVertexPosCurrent[ 8] = x2;
+  pVertexPosCurrent[ 9] = y1;
+  pVertexPosCurrent[10] = x2;
+  pVertexPosCurrent[11] = y2;
 #if 0
   printf("%4.2f,%4.2f -> %4.2f,%4.2f", x, y, x + width, y + height);
   printf(" (%1.2f,%1.2f,%1.2f,%1.2f)\n", colorR, colorG, colorB, colorA);
@@ -740,13 +778,13 @@ void drawRect(float x, float y, float width, float height)
   numRects++;
 }
 
-/* convert Meters into an OpenGL attribute arrays */
-void tesselateParticals(struct Meters_t* Meters)
+/* convert Rectangles into an OpenGL attribute arrays */
+void tesselateRectangles(struct Rectangles_t* Rect)
 {
-  for (size_t index = 0; index < Meters->count; ++index)
+  for (size_t index = 0; index < Rect->count; ++index)
   {
-    setColor(Meters->colorR[index], Meters->colorG[index], Meters->colorB[index], Meters->colorA[index]);
-    drawRect(Meters->positionX[index], Meters->positionY[index], Meters->sizeX[index], Meters->sizeY[index]);
+    setColor(Rect->colorR[index], Rect->colorG[index], Rect->colorB[index], Rect->colorA[index]);
+    drawRect(Rect->X1[index], Rect->Y1[index], Rect->X2[index], Rect->Y2[index]);
   }
 }
 
@@ -799,14 +837,20 @@ void flushAndCommit()
 
 void Render(void)
 {
+  int rc;
   srand((unsigned int)time(NULL));
 
   /* meter state - each meter is a coloured rectangle */
   struct Meters_t *Meters = NULL;
-  int rc = posix_memalign((void **)&Meters, 32, sizeof(struct Meters_t));
+  rc = posix_memalign((void **)&Meters, 32, sizeof(struct Meters_t));
+  assert(rc == 0);
+
+  struct Rectangles_t *Rect = NULL;
+  rc = posix_memalign((void **)&Rect, 32, sizeof(struct Rectangles_t));
   assert(rc == 0);
 
   constructMeters(Meters);
+  updateRectanglesFromMeters(Rect, Meters, 0);
 
   CheckFrameBufferStatus();
 
@@ -965,7 +1009,7 @@ void Render(void)
   glClearColor(0, 0, 0, 1);
   glClear(GL_COLOR_BUFFER_BIT /*| GL_DEPTH_BUFFER_BIT*/);
 
-  //tesselateParticals(Meters);
+  //tesselateRectangles(Meters);
 
   /* blit texture (background) into framebuffer */
 #if 0
@@ -986,9 +1030,8 @@ void Render(void)
   CheckError();
 #endif
 
-  /* draw a full screen rectangle first */
+  /* draw a full screen rectangle first, copying texture*/
   numRects = 0;
-
   setColor(0.0f, 0.0f, 0.0f, 0.0f);
   drawRect(0, 0, appWidth, appHeight);
 
@@ -1004,6 +1047,7 @@ void Render(void)
   int frame = 0;
   int num_frames = 21;
   int endless = 0;
+  int optimize = 0;
   //printf("Rendering %d frames.\n", num_frames);
 
   while ((frame < num_frames) | endless) {
@@ -1054,8 +1098,10 @@ void Render(void)
 #endif
 #if 1
     rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_start);
-    /* update positions */
+    /* update meters */
     updateMeters(Meters);
+    /* update rectangles */
+    updateRectanglesFromMeters(Rect, Meters, optimize);
     rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_end);
     timespec_sub(&ts_action_end, &ts_action_start);
     printf("update %3.2f ms ", (float)ts_action_end.tv_nsec / 1000000.0f);
@@ -1063,8 +1109,8 @@ void Render(void)
 
 #if 1
     rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_start);
-     /* update vertices */
-    tesselateParticals(Meters);
+     /* tesselate rectangles into OpenGL vertex array */
+    tesselateRectangles(Rect);
     rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_end);
     timespec_sub(&ts_action_end, &ts_action_start);
     printf("tesselate %3.2f ms ", (float)ts_action_end.tv_nsec / 1000000.0f);
@@ -1098,6 +1144,7 @@ void Render(void)
       printf("total %3.2f ms (fps = %3.2f)\n",
       (float)ts_frame_end.tv_nsec / 1000000.0f, 1000000000.0f / (float)ts_frame_end.tv_nsec);
     }
+    optimize = 1;
     frame++;
   }
 
