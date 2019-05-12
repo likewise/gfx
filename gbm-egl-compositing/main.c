@@ -25,14 +25,14 @@ struct gbm_surface *gs;
 // comment-out to allocate our own FBO -- improves render performance, unknown why yet
 #define USE_EGL_SURFACE
 #define USE_DYNAMIC_STREAMING
-#define MAX_METERS 2048
+#define MAX_METERS 1024
 #define NUM_RECT 4
 #define MAX_RECTS (MAX_METERS * NUM_RECT)
 
 static const size_t appWidth = 1920 * 4;
 static const size_t appHeight = 1080 * 4;
 
-#define NUM_BUFS 3
+#define NUM_BUFS 1
 int buf_id = 0;
 
 /* two triangles, each three vertices, each two coordinates */
@@ -148,14 +148,14 @@ void RenderTargetInit(void)
     /* GBM surface */
     gs = gbm_surface_create(
       gbm, appWidth, appHeight, GBM_BO_FORMAT_ARGB8888,
-#if 0
+#if 0 // 3x slower
       /* non-tiled, sub-optimal for performance */
       GBM_BO_USE_LINEAR |
 #endif
-#if 0
+#if 1
       GBM_BO_USE_SCANOUT |
 #endif
-#if 0
+#if 1
       GBM_BO_USE_RENDERING |
 #endif
       0);
@@ -618,23 +618,10 @@ void updateMeters(struct Meters_t *Meters)
   }
 }
 
-void updateRectanglesFromMeters(struct Rectangles_t *Rect, struct Meters_t *Meters, int optimize)
+void updateRectanglesFromMeters(struct Rectangles_t *Rect, struct Meters_t *Meters)
 {
   for (size_t meter = 0, rect = 0; meter < MAX_METERS; meter++)
   {
-    if (Meters->hold[meter] < Meters->prev_hold[meter]) {
-      /* remove old hold tick, safely assume it is lower */
-      Rect->X1[rect] = (meter % HOR_METERS) * VU_STRIDE;
-      Rect->X2[rect] = (meter % HOR_METERS) * VU_STRIDE + VU_WIDTH;
-      Rect->Y1[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->prev_hold[meter] - VU_TICK_HEIGHT;
-      Rect->Y2[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->prev_hold[meter];
-      Rect->colorR[rect] = 0.0;
-      Rect->colorG[rect] = 0.0;
-      Rect->colorB[rect] = 0.0;
-      Rect->colorA[rect] = 0.5;
-      rect++;
-    }
-
     /* volume bar */
     Rect->X1[rect] = (meter % HOR_METERS) * VU_STRIDE;
     Rect->X2[rect] = (meter % HOR_METERS) * VU_STRIDE + VU_WIDTH;
@@ -644,18 +631,6 @@ void updateRectanglesFromMeters(struct Rectangles_t *Rect, struct Meters_t *Mete
     Rect->colorG[rect] = 1.0;
     Rect->colorB[rect] = 0.0;
     Rect->colorA[rect] = 0.0;
-
-    if (optimize) {
-      /* volume bar higher? */
-      if (Meters->volume[meter] > Meters->prev_volume[meter]) {
-        /* draw the volume bar increase only*/
-        Rect->Y1[rect] += Meters->prev_volume[meter];
-      } else if (Meters->volume[meter] <= Meters->prev_volume[meter]) {
-        /* draw nothing */
-        Rect->Y2[rect] = Rect->Y1[rect];
-      }
-      //Rect->colorB[rect] = 1.0;
-    }
     rect++;
 
     /* all except volume bar */
@@ -667,17 +642,6 @@ void updateRectanglesFromMeters(struct Rectangles_t *Rect, struct Meters_t *Mete
     Rect->colorG[rect] = 0.0;
     Rect->colorB[rect] = 0.0;
     Rect->colorA[rect] = 0.5;
-
-    if (optimize) {
-      /* volume bar lower ? */
-      if (Meters->volume[meter] < Meters->prev_volume[meter]) {
-        /* draw the volume bar decrease only*/
-        Rect->Y2[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->prev_volume[meter];
-      } else if (Meters->volume[meter] >= Meters->prev_volume[meter]) {
-        /* draw nothing */
-        Rect->Y2[rect] = Rect->Y1[rect];
-      }
-    }
     rect++;
 
     /* hold tick */
@@ -696,6 +660,106 @@ void updateRectanglesFromMeters(struct Rectangles_t *Rect, struct Meters_t *Mete
       Rect->sizeX[index], Rect->sizeY[index]);
 #endif
     Rect->count = rect;
+  }
+}
+
+void addRectangle(struct Rectangles_t *Rect, float x1,  float y1, float x2, float y2)
+{
+  size_t rect = Rect->count;
+  Rect->X1[rect] = x1;
+  Rect->Y1[rect] = y1;
+  Rect->X2[rect] = x2;
+  Rect->Y2[rect] = y2;
+  Rect->colorR[rect] = 0.0;
+  Rect->colorG[rect] = 0.0;
+  Rect->colorB[rect] = 0.0;
+  Rect->colorA[rect] = 0.0;
+  rect++;
+  Rect->count = rect;
+  assert(Rect->count < MAX_RECTS);
+}
+
+void updateRectanglesFromMetersOptimized(struct Rectangles_t *Rect, struct Meters_t *Meters)
+{
+  for (size_t meter = 0, rect = 0; meter < MAX_METERS; meter++)
+  {
+    if ((Meters->hold[meter] == Meters->prev_hold[meter]) &&
+       (Meters->volume[meter] == Meters->prev_volume[meter]))
+      continue;
+
+    if (Meters->hold[meter] < Meters->prev_hold[meter]) {
+      /* remove old hold tick */
+      Rect->X1[rect] = (meter % HOR_METERS) * VU_STRIDE;
+      Rect->X2[rect] = (meter % HOR_METERS) * VU_STRIDE + VU_WIDTH;
+      Rect->Y1[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->prev_hold[meter] - VU_TICK_HEIGHT;
+      Rect->Y2[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->prev_hold[meter];
+      Rect->colorR[rect] = 0.0;
+      Rect->colorG[rect] = 0.0;
+      Rect->colorB[rect] = 0.0;
+      Rect->colorA[rect] = 0.5;
+      rect++;
+    } else if (Meters->hold[meter] > Meters->prev_hold[meter]) {
+      /* remove old hold tick */
+      Rect->X1[rect] = (meter % HOR_METERS) * VU_STRIDE;
+      Rect->X2[rect] = (meter % HOR_METERS) * VU_STRIDE + VU_WIDTH;
+      Rect->Y1[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->prev_hold[meter] - VU_TICK_HEIGHT;
+      Rect->Y2[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->prev_hold[meter];
+      Rect->colorR[rect] = 1.0;
+      Rect->colorG[rect] = 1.0;
+      Rect->colorB[rect] = 0.0;
+      Rect->colorA[rect] = 0.0;
+      rect++;
+    }
+
+    /* volume bar higher? */
+    if (Meters->volume[meter] > Meters->prev_volume[meter]) {
+      /* draw the volume bar increase only */
+      Rect->X1[rect] = (meter % HOR_METERS) * VU_STRIDE;
+      Rect->X2[rect] = (meter % HOR_METERS) * VU_STRIDE + VU_WIDTH;
+#if 1
+      Rect->Y1[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->prev_volume[meter];
+#else // now done in else if of clearing tick
+      /* but we need also to overwrite the old tick */
+      Rect->Y1[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->prev_volume[meter] - VU_TICK_HEIGHT;
+      if (Rect->Y1[rect] < ((meter/HOR_METERS) * appHeight / VU_ROWS)) {
+        Rect->Y1[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS;
+      }
+#endif
+      Rect->Y2[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->volume[meter];
+      Rect->colorR[rect] = 1.0;
+      Rect->colorG[rect] = 1.0;
+      Rect->colorB[rect] = 0.0;
+      Rect->colorA[rect] = 0.0;
+      rect++;
+    } else if (Meters->volume[meter] < Meters->prev_volume[meter]) {
+      /* draw the volume bar decrease only */
+      Rect->X1[rect] = (meter % HOR_METERS) * VU_STRIDE;
+      Rect->X2[rect] = (meter % HOR_METERS) * VU_STRIDE + VU_WIDTH;
+      Rect->Y1[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->volume[meter];
+      Rect->Y2[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->prev_volume[meter];
+      Rect->colorR[rect] = 0.0;
+      Rect->colorG[rect] = 0.0;
+      Rect->colorB[rect] = 0.0;
+      Rect->colorA[rect] = 0.5;
+      rect++;
+    }
+
+    /* hold tick */
+    Rect->X1[rect] = (meter % HOR_METERS) * VU_STRIDE;
+    Rect->X2[rect] = (meter % HOR_METERS) * VU_STRIDE + VU_WIDTH;
+    Rect->Y1[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->hold[meter] - VU_TICK_HEIGHT;
+    Rect->Y2[rect] = (meter/HOR_METERS) * appHeight / VU_ROWS + Meters->hold[meter];
+    Rect->colorR[rect] = 1.0;
+    Rect->colorG[rect] = 0.0;
+    Rect->colorB[rect] = 0.0;
+    Rect->colorA[rect] = 0.5;
+    rect++;
+#if 0
+    printf("%3.2f, %3.2f, %3.2f, %3.2f\n", Rect->positionX[index], Rect->positionY[index],
+      Rect->sizeX[index], Rect->sizeY[index]);
+#endif
+    Rect->count = rect;
+    assert(Rect->count < MAX_RECTS);
   }
 }
 
@@ -850,7 +914,7 @@ void Render(void)
   assert(rc == 0);
 
   constructMeters(Meters);
-  updateRectanglesFromMeters(Rect, Meters, 0);
+  updateRectanglesFromMeters(Rect, Meters);
 
   CheckFrameBufferStatus();
 
@@ -1046,7 +1110,7 @@ void Render(void)
 
   int frame = 0;
   int num_frames = 21;
-  int endless = 0;
+  int endless = 1;
   int optimize = 0;
   //printf("Rendering %d frames.\n", num_frames);
 
@@ -1101,7 +1165,18 @@ void Render(void)
     /* update meters */
     updateMeters(Meters);
     /* update rectangles */
-    updateRectanglesFromMeters(Rect, Meters, optimize);
+    if (optimize)
+      updateRectanglesFromMetersOptimized(Rect, Meters);
+    else
+      updateRectanglesFromMeters(Rect, Meters);
+    for (int x = 0; x < appWidth; x += appWidth / 4)
+    for (int y = 0; y < appHeight; y += appHeight / 4)
+    addRectangle(Rect, x, y, x+appWidth / 8, y+appHeight / 8);
+
+    for (int x = 0; x < appWidth; x += appWidth / 8)
+    for (int y = 0; y < appHeight; y += appHeight / 8)
+    addRectangle(Rect, x+appWidth / 8, y+appHeight / 8, x+appWidth / 8+appWidth / 16, y+appHeight / 8+appHeight /16);
+
     rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_end);
     timespec_sub(&ts_action_end, &ts_action_start);
     printf("update %3.2f ms ", (float)ts_action_end.tv_nsec / 1000000.0f);
