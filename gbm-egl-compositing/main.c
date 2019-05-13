@@ -10,10 +10,12 @@
 #include <unistd.h>
 
 #include <gbm.h>
-#include <png.h>
+#include <drm/drm_fourcc.h>
 
 #include <epoxy/gl.h>
 #include <epoxy/egl.h>
+
+#include <png.h>
 
 GLuint program;
 EGLDisplay display;
@@ -21,18 +23,19 @@ EGLSurface surface = EGL_NO_SURFACE;
 EGLContext context;
 struct gbm_device *gbm;
 struct gbm_surface *gs;
+struct gbm_bo *previous_bo;
 
 // comment-out to allocate our own FBO -- improves render performance, unknown why yet
 #define USE_EGL_SURFACE
 #define USE_DYNAMIC_STREAMING
-#define MAX_METERS 1024
+#define MAX_METERS 2048
 #define NUM_RECT 4
 #define MAX_RECTS (MAX_METERS * NUM_RECT)
 
 static const size_t appWidth = 1920 * 4;
 static const size_t appHeight = 1080 * 4;
 
-#define NUM_BUFS 1
+#define NUM_BUFS 3
 int buf_id = 0;
 
 /* two triangles, each three vertices, each two coordinates */
@@ -139,10 +142,12 @@ void RenderTargetInit(void)
   EGLConfig config = NULL;
 
   /* EGL can work without a native surface; in that case we initialize a
-   * framebuffer object (FBO) ourselves in InitFBO(). In case of an EGL
-   * surface, choose a configuration */
+   * framebuffer object (FBO) ourselves in InitFBO().
+
+   * In case of an EGL surface, choose a configuration here */
 #ifdef USE_EGL_SURFACE
   config = get_config();
+  assert(config);
 #endif
   if (config) {
     /* GBM surface */
@@ -151,6 +156,8 @@ void RenderTargetInit(void)
 #if 0 // 3x slower
       /* non-tiled, sub-optimal for performance */
       GBM_BO_USE_LINEAR |
+#else
+      /* without linear, we expect and assert I915_FORMAT_MOD_X_TILED later */
 #endif
 #if 1
       GBM_BO_USE_SCANOUT |
@@ -164,7 +171,6 @@ void RenderTargetInit(void)
     surface = eglCreatePlatformWindowSurfaceEXT(display, config, gs, NULL);
     assert(surface != EGL_NO_SURFACE);
   }
-
   const EGLint contextAttribs[] = {
     EGL_CONTEXT_CLIENT_VERSION, 2,
     EGL_NONE
@@ -175,6 +181,9 @@ void RenderTargetInit(void)
 
   /* OES_surfaceless_context */
   egl_rc = eglMakeCurrent(display, surface, surface, context);
+  assert(egl_rc == EGL_TRUE);
+
+  egl_rc = eglSwapInterval(display, 1);
   assert(egl_rc == EGL_TRUE);
 }
 
@@ -866,14 +875,14 @@ void flushBufferData()
   glBindBuffer(GL_ARRAY_BUFFER, vertexPosVBO);
   CheckError();
   offset = buf_id * MAX_RECTS * 12 * sizeof(float);
-  amount = numRects * 12 * sizeof(float);
+  amount = MAX_RECTS /*numRects*/ * 12 * sizeof(float);
   glBufferSubData(GL_ARRAY_BUFFER, offset, amount, pVertexPosBufferData + offset);
   CheckError();
 
   glBindBuffer(GL_ARRAY_BUFFER, vertexColVBO);
   CheckError();
   offset = buf_id * MAX_RECTS * 24 * sizeof(float);
-  amount = numRects * 24 * sizeof(float);
+  amount = MAX_RECTS /*numRects*/* 24 * sizeof(float);
   glBufferSubData(GL_ARRAY_BUFFER, offset, amount, pVertexColBufferData + offset);
   CheckError();
 
@@ -1157,10 +1166,6 @@ void Render(void)
 
     printf("frame %d ", frame);
 #if 1
-    /* flush buffers and commit drawing instructions to GPU */
-    flushAndCommit();
-#endif
-#if 1
     rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_start);
     /* update meters */
     updateMeters(Meters);
@@ -1169,6 +1174,7 @@ void Render(void)
       updateRectanglesFromMetersOptimized(Rect, Meters);
     else
       updateRectanglesFromMeters(Rect, Meters);
+#if 1
     for (int x = 0; x < appWidth; x += appWidth / 4)
     for (int y = 0; y < appHeight; y += appHeight / 4)
     addRectangle(Rect, x, y, x+appWidth / 8, y+appHeight / 8);
@@ -1176,6 +1182,7 @@ void Render(void)
     for (int x = 0; x < appWidth; x += appWidth / 8)
     for (int y = 0; y < appHeight; y += appHeight / 8)
     addRectangle(Rect, x+appWidth / 8, y+appHeight / 8, x+appWidth / 8+appWidth / 16, y+appHeight / 8+appHeight /16);
+#endif
 
     rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_end);
     timespec_sub(&ts_action_end, &ts_action_start);
@@ -1190,15 +1197,51 @@ void Render(void)
     timespec_sub(&ts_action_end, &ts_action_start);
     printf("tesselate %3.2f ms ", (float)ts_action_end.tv_nsec / 1000000.0f);
 #endif
+#if 1
+    /* flush buffers and commit drawing instructions to GPU */
+    flushAndCommit();
+#endif
 
     rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_start);
+#if 0
+    glFinish();
+#else
     if (surface == EGL_NO_SURFACE) {
       /* glFlush() ensures all commands are on the GPU */
       /* glFinish() ensures all commands are also finished */
       glFinish();
     } else {
       eglSwapBuffers(display, surface);
+      //struct gbm_bo_tiling tiling;
+      struct gbm_bo *bo = gbm_surface_lock_front_buffer(gs);
+      assert(bo);
+      if (bo) {
+        EGLint handle = gbm_bo_get_handle(bo).u32;
+        printf("frame %d handle %d\n", frame, (int)handle);
+#if 0
+        uint32_t width = gbm_bo_get_width(bo);
+        uint32_t height = gbm_bo_get_height(bo);
+        uint32_t stride = gbm_bo_get_stride(bo);
+        int planes = gbm_bo_get_plane_count(bo);
+        uint64_t modifier = gbm_bo_get_modifier(bo);
+        //printf("%u x %u, stride %u bytes, %d planes\n", width, height, stride, planes);
+        if (modifier == I915_FORMAT_MOD_X_TILED) {
+          printf("I915_FORMAT_MOD_X_TILED\n");
+        }
+#endif
+        int fd = gbm_bo_get_fd(bo);
+        assert(fd >= 0);
+        if (fd >= 0) {
+          /* @TODO Use DMA-BUF here */
+          close(fd);
+        }
+      }
+      if (previous_bo) {
+        gbm_surface_release_buffer(gs, previous_bo);
+      }
+      previous_bo = bo;
     }
+#endif
     rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_end);
     timespec_sub(&ts_action_end, &ts_action_start);
     printf("swap %3.2f ms ", (float)ts_action_end.tv_nsec / 1000000.0f);
@@ -1228,6 +1271,10 @@ void Render(void)
   timespec_sub(&ts_end, &ts_start);
   printf("CLOCK_MONOTONIC reports %ld.%09ld seconds\n",
     ts_end.tv_sec, ts_end.tv_nsec);
+
+  if (previous_bo) {
+    gbm_surface_release_buffer(gs, previous_bo);
+  }
 
 #ifndef USE_DYNAMIC_STREAMING
   free(pVertexPosBufferData);
