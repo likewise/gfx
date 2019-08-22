@@ -42,5 +42,6 @@ void main()
   // as*(1-ad) + ad*(1-as) + as*ad = as - as*ad +ad - ad*as + as*ad = as + ad - as*ad
   float opacity = texel.a + outVertexCol.a - texel.a * outVertexCol.a;
 
-  gl_FragColor = vec4(vec3(1.0 - vtxOpacity) * texCol + vtxCol, opacity);
+  //gl_FragColor = vec4(vec3(1.0 - vtxOpacity) * texCol + vtxCol, opacity);
+  gl_FragColor = vec4(vec3(1.0 - vtxOpacity) * texCol + vtxCol, 1.0);
 }
