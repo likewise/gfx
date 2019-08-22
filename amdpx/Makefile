@@ -1,7 +1,7 @@
 #!makefile
 
 amdpx: main.c
-	gcc -g $< -lX11 -lXcomposite -o $@
+	$(CC) -g $< -lX11 -lXcomposite -o $@
 
 clean:
 	rm -rf amdpx

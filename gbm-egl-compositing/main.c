@@ -369,9 +369,9 @@ void InitGLES(void)
   GLint linked;
   GLuint vertexShader;
   GLuint fragmentShader;
-  vertexShader = LoadShader("vert.glsl", GL_VERTEX_SHADER);
+  vertexShader = LoadShader("/usr/share/gbm-egl-compositing/vert.glsl", GL_VERTEX_SHADER);
   assert(vertexShader != 0);
-  fragmentShader = LoadShader("frag.glsl", GL_FRAGMENT_SHADER);
+  fragmentShader = LoadShader("/usr/share/gbm-egl-compositing/frag.glsl", GL_FRAGMENT_SHADER);
   assert(fragmentShader  != 0);
   program = glCreateProgram();
   assert(program  != 0);
