@@ -2,5 +2,5 @@
 
 
 all:
-	$(CC) -std=c99 -g -o gbm-egl main.c -lgbm -lepoxy -lpng
+	$(CC) $(CFLAGS) $(LDFLAGS) std=c99 main.c -lgbm -lepoxy -lpng -lrt -lm -o gbm-egl
 
