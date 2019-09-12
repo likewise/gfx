@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 
 #include <gbm.h>
 #include <drm/drm_fourcc.h>
@@ -39,7 +40,7 @@ struct gbm_bo *previous_bo = NULL;
 // comment-out to allocate our own FBO -- improves render performance, unknown why yet
 #define USE_EGL_SURFACE
 #define USE_DYNAMIC_STREAMING
-#define MAX_METERS (512)
+#define MAX_METERS (512*4)
 #define NUM_RECT 4
 #define MAX_RECTS (MAX_METERS * NUM_RECT)
 
@@ -130,7 +131,8 @@ EGLConfig get_config(void)
 
 void RenderTargetInit(void)
 {
-  int fd = open("/dev/dri/renderD128", O_RDWR);
+//  int fd = open("/dev/dri/renderD128", O_RDWR);
+  int fd = open("/dev/dri/card0", O_RDWR);
   assert(fd >= 0);
 
   gbm = gbm_create_device(fd);
@@ -696,7 +698,7 @@ void addRectanglesFromMeters(struct Rectangles_t *Rect, struct Meters_t *Meters)
       rect++;
     }
 
-#if 0 /* @TODO remove rendering active part of volume bar; should be already in background */
+#if 1 /* @TODO remove rendering active part of volume bar; should be already in background */
     /* volume bar */
     Rect->X1[rect] = (meter % HOR_METERS) * VU_STRIDE;
     Rect->X2[rect] = (meter % HOR_METERS) * VU_STRIDE + VU_WIDTH;
@@ -1008,6 +1010,11 @@ void Render(void)
   data = readImage("AlphaBall.png", &w, &h);
   //assert(w == appWidth);
   //assert(h == appHeight);
+#elif 1
+  int fd = open("/tmp/wom0", O_RDONLY);
+  assert(fd >= 0);
+  data = (uint8_t *)mmap(0, 1920*SCALE*1080*SCALE*4, PROT_READ, MAP_SHARED, fd, 0);
+  assert(data);
 #else
   /* generate synthetic background */
   data = malloc(appWidth * appHeight * 4);
@@ -1026,6 +1033,19 @@ void Render(void)
   data[(0 * appWidth + 0) * 4 + 1] = 0;
   data[(0 * appWidth + 0) * 4 + 2] = 0;
   data[(0 * appWidth + 0) * 4 + 3] = 255;
+
+  /* Green pixel */
+  data[(0 * appWidth + 1) * 4 + 0] = 0;
+  data[(0 * appWidth + 1) * 4 + 1] = 255;
+  data[(0 * appWidth + 1) * 4 + 2] = 0;
+  data[(0 * appWidth + 1) * 4 + 3] = 255;
+
+  /* Blue pixel */
+  data[(0 * appWidth + 2) * 4 + 0] = 0;
+  data[(0 * appWidth + 2) * 4 + 1] = 0;
+  data[(0 * appWidth + 2) * 4 + 2] = 255;
+  data[(0 * appWidth + 2) * 4 + 3] = 255;
+
 #endif
 
   glActiveTexture(GL_TEXTURE0);
@@ -1202,20 +1222,24 @@ void Render(void)
   ts_frame_start = ts_start;
 
   int frame = 0;
-  int num_frames = 61;
+  int num_frames = 1 + 10 * 60;
   int endless = 0;
   int optimize = 0;
   //printf("Rendering %d frames.\n", num_frames);
 
+  // main rendering loop
   while ((frame < num_frames) | endless) {
+  printf("frame %d ", frame);
 
   glClear(GL_DEPTH_BUFFER_BIT);
 
   /* blit a background image */
 #if 0
+    rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_start);
     /* read from background texture, draw into surface */
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fbid);
     CheckError();
+    // draw into default surface
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
     CheckError();
     /* default, blit whole screen */
@@ -1245,12 +1269,16 @@ void Render(void)
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     CheckError();
+
+    rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_end);
+    timespec_sub(&ts_action_end, &ts_action_start);
+    printf("bg_blit %3.2f ms ", (float)ts_action_end.tv_nsec / 1000000.0f);
+
 #elif 0
     glClear(GL_COLOR_BUFFER_BIT /*| GL_DEPTH_BUFFER_BIT*/);
     CheckError();
 #endif
 
-    printf("frame %d ", frame);
 #if 1
     rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_start);
     /* update meters */
@@ -1270,7 +1298,7 @@ void Render(void)
     }
 #endif
 
-
+    // wether or not to use optimized meters
     optimize = 0;//(frame > 4);
     if (optimize) {
       addRectanglesFromMetersOptimized(Rect, Meters);
@@ -1278,7 +1306,8 @@ void Render(void)
       addRectanglesFromMeters(Rect, Meters);
     }
 
-#if 1
+    // blit in partial rectangles 
+#if 0
     for (int x = 0; x < appWidth; x += appWidth / 4)
       for (int y = 0; y < appHeight; y += appHeight / 4)
         addRectangle(Rect, x, y, x+appWidth / 8, y+appHeight / 8, 0.5);
@@ -1289,12 +1318,12 @@ void Render(void)
 
     addRectangle(Rect, 0, 0, appWidth, appHeight, +0.9);
 #endif
+    addRectangle(Rect, 0, 0, appWidth, appHeight, +0.9);
 
     rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_end);
     timespec_sub(&ts_action_end, &ts_action_start);
-    printf("update %3.2f ms ", (float)ts_action_end.tv_nsec / 1000000.0f);
+    printf("scene %3.2f ms ", (float)ts_action_end.tv_nsec / 1000000.0f);
 #endif
-
 
 #if 1
     rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_start);
@@ -1320,8 +1349,9 @@ void Render(void)
       glFinish();
     } else {
 
-      /* prove that we have 16 ms of CPU time left per iteration */
-      //usleep(30*1000);
+      /* prove that we have X ms of CPU time left per iteration, X ~= 16+ */
+      /* increase this number until the FPS is affected */
+      //usleep(16*1000);
 
       /* @TODO what is the guaranteed behaviour regarding back and front
        * buffer content copies and damage. See eglSwapBuffersWithDamageKHR():
@@ -1334,14 +1364,15 @@ void Render(void)
       if (bo) {
         /* prove that multi-buffering is used */
         EGLint handle = gbm_bo_get_handle(bo).u32;
-        printf("frame %d handle %d\n", frame, (int)handle);
-#if 1 /* @TODO typically pass these along with DMA BUF */
+        //printf("frame %d handle %d\n", frame, (int)handle);
+        /* @TODO typically pass these along with DMA BUF */
         uint32_t width = gbm_bo_get_width(bo);
         uint32_t height = gbm_bo_get_height(bo);
         uint32_t stride = gbm_bo_get_stride(bo);
         int planes = gbm_bo_get_plane_count(bo);
         uint64_t modifier = gbm_bo_get_modifier(bo);
-        //printf("%u x %u, stride %u bytes, %d planes\n", width, height, stride, planes);
+#if 0
+        printf("%u x %u, stride %u bytes, %d planes\n", width, height, stride, planes);
         if (modifier == I915_FORMAT_MOD_X_TILED) {
           printf("I915_FORMAT_MOD_X_TILED\n");
         }
@@ -1389,6 +1420,26 @@ void Render(void)
       printf("total %3.2f ms (fps = %3.2f)\n",
       (float)ts_frame_end.tv_nsec / 1000000.0f, 1000000000.0f / (float)ts_frame_end.tv_nsec);
     }
+
+    /* generate a PNG every 60 frames */
+    if ((frame % 60) == 0) {
+      GLubyte *content;
+      content = malloc(appWidth * appHeight * 4);
+      assert(content);
+      //printf("glFinish()\n");
+      glFinish();
+      //printf("glReadPixels()\n");
+      // default is GL_BACK for double buffering
+      glReadBuffer(GL_BACK);
+      glReadPixels(0, 0, appWidth, appHeight, GL_RGBA, GL_UNSIGNED_BYTE, content);
+      CheckError();
+      printf("writeImage() frame %d\n");
+      char png_output_filename[256];
+      snprintf(&png_output_filename[0], 255, "frame%d.png", frame);
+      assert(!writeImage(png_output_filename, appWidth, appHeight, content, "gbm-egl-compositing"));
+      free(content);
+    }
+
     optimize = 1;
     frame++;
   }
@@ -1412,20 +1463,6 @@ void Render(void)
   glDeleteBuffers(1, &vertexColVBO);
 
   free(Meters); Meters = NULL;
-
-  GLubyte *content;
-  content = malloc(appWidth * appHeight * 4);
-  assert(content);
-  printf("glFinish()\n");
-  glFinish();
-  printf("glReadPixels()\n");
-  // default is GL_BACK for double buffering
-  glReadBuffer(GL_BACK);
-  glReadPixels(0, 0, appWidth, appHeight, GL_RGBA, GL_UNSIGNED_BYTE, content);
-  CheckError();
-  printf("writeImage()\n");
-  assert(!writeImage("screenshot.png", appWidth, appHeight, content, "gbm-egl-compositing"));
-  free(content);
 }
 
 int main(void)

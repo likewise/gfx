@@ -2,5 +2,5 @@
 
 
 all:
-	$(CC) -std=c99 -g -o gbm main.c -lgbm -lEGL
+	$(CC) $(CFLAGS) $(LDFLAGS) -std=c99 -g -o gbm main.c -lgbm -lEGL
 
