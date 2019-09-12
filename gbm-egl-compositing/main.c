@@ -1011,6 +1011,8 @@ void Render(void)
   //assert(w == appWidth);
   //assert(h == appHeight);
 #elif 1
+  /* acp_app -platform synview >acp_app.log 2&>1 & */
+  /* gbm-egl-compositing */
   int fd = open("/tmp/wom0", O_RDONLY);
   assert(fd >= 0);
   data = (uint8_t *)mmap(0, 1920*SCALE*1080*SCALE*4, PROT_READ, MAP_SHARED, fd, 0);
@@ -1050,7 +1052,15 @@ void Render(void)
 
   glActiveTexture(GL_TEXTURE0);
 
-  /* create a texture */
+  /* 
+   * http://www.edlangley.co.uk/projects/opengl-streaming-textures/
+   * "the trouble with using glTexImage2D to load the texture data, is
+   * that the whole buffer is then copied to another memory location again"
+   * 
+   * GL_INTEL_map_texture 
+   */
+
+  /* create a texture from the data */
   GLuint texid = 0;
   glGenTextures(1, &texid);
   glBindTexture(GL_TEXTURE_2D, texid);
