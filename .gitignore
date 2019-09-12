@@ -2,3 +2,7 @@
 screenshot*.png
 dump*.png
 *.out
+gbm-egl-performance/gbm-egl-performance
+gbm-surface-gbm-fbo/gbm-surface
+gbm-egl-compositing/gbm-egl-compositing
+gbm-egl/gbm-egl

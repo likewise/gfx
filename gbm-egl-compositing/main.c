@@ -28,8 +28,12 @@ EGLSurface surface = EGL_NO_SURFACE;
 EGLContext context;
 struct gbm_device *gbm;
 struct gbm_surface *gs;
-struct gbm_bo *previous_bo;
+struct gbm_bo *previous_bo = NULL;
 
+/* Scaling factor against high definition (HD, 1920x1080).
+ * Used both vertically and horizontally.
+ * The resulting number of pixels is SCALE*SCALE*1920*1080.
+ */
 #define SCALE 4
 
 // comment-out to allocate our own FBO -- improves render performance, unknown why yet
@@ -205,8 +209,10 @@ void RenderTargetInit(void)
   egl_rc = eglMakeCurrent(display, surface, surface, context);
   assert(egl_rc == EGL_TRUE);
 
+#ifdef USE_EGL_SURFACE
   egl_rc = eglSwapInterval(display, 1);
   assert(egl_rc == EGL_TRUE);
+#endif
 }
 
 GLuint LoadShader(const char *name, GLenum type)
@@ -354,6 +360,7 @@ GLenum _CheckError(void)
   return error;
 }
 
+static GLuint our_fbo = 0;
 void InitFBO(void)
 {
   struct gbm_bo *bo = gbm_bo_create(gbm, appWidth, appHeight,
@@ -375,6 +382,7 @@ void InitFBO(void)
   glGenFramebuffers(1, &fbid);
   glBindFramebuffer(GL_FRAMEBUFFER, fbid);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texid, 0);
+  our_fbo = fbid;
 /*
   GLuint rbid;
   glGenRenderbuffers(1, &rbid);
@@ -1045,7 +1053,7 @@ void Render(void)
 #ifndef USE_EGL_SURFACE
 #error "Need to bind to the InitFBO framebuffer here."
 #endif
-  glBindFramebuffer(GL_FRAMEBUFFER, 0/*default framebuffer*/);
+  glBindFramebuffer(GL_FRAMEBUFFER, our_fbo/*0*/ /*default framebuffer*/);
 
   /* Setup 2D orthographic matrix view
    * scalex, 0,      0,      translatex,
@@ -1195,7 +1203,7 @@ void Render(void)
 
   int frame = 0;
   int num_frames = 61;
-  int endless = 1;
+  int endless = 0;
   int optimize = 0;
   //printf("Rendering %d frames.\n", num_frames);
 
@@ -1344,11 +1352,13 @@ void Render(void)
         if (fd >= 0) {
           /* open FPGA DMA */
           int sgdma_fd = open("/dev/xdma0_h2c_0", O_RDWR);
-          assert(sgdma_fd >= 0);
+          //assert(sgdma_fd >= 0);
           if (sgdma_fd >= 0) {
             rc = ioctl(sgdma_fd, IOCTL_XDMA_IMPORT_DMABUF, &fd);
             assert(rc >= 0);
             close(sgdma_fd);
+          } else {
+
           }
           close(fd);
         }
