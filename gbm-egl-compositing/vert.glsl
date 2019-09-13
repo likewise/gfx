@@ -1,3 +1,7 @@
+// Vertex Shader for Neuron Multiviewer OpenGL GPU rendering
+// 2019 Leon Woestenberg <leon@sidebranch.com>
+//
+
 attribute vec3 inVertexPos;
 attribute vec4 inVertexCol;
 //attribute vec2 inTexCoord;
@@ -17,7 +21,6 @@ void main()
    // pass vertex colour as-is
    outVertexCol = inVertexCol;
 
-   //outTexCoord = inTexCoord;
-   // GL coords are in [-1,1], texture coordinates are in [0,1]
+   // GL coords are in [-1,1], texture coordinates are in [0,1]; translate
    outTexCoord = vec2((gl_Position.x + 1.0f) / 2.0f, (gl_Position.y + 1.0f) / 2.0f);
 }

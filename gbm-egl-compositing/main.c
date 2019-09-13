@@ -41,7 +41,7 @@ struct gbm_bo *previous_bo = NULL;
 // comment-out to allocate our own FBO -- improves render performance, unknown why yet
 #define USE_EGL_SURFACE
 #define USE_DYNAMIC_STREAMING
-#define MAX_METERS 128 //(512*4)
+#define MAX_METERS (512/4)
 #define NUM_RECT 4
 #define MAX_RECTS (MAX_METERS * NUM_RECT)
 
@@ -616,7 +616,7 @@ struct Rectangles_t
 };
 
 /* what percentage of pixels represent VU meters? */
-#define VU_COVERAGE 25
+#define VU_COVERAGE 10
 #define VU_ROWS 4
 #define HOR_METERS (MAX_METERS/VU_ROWS)
 // 2 rectangles per meter
@@ -679,6 +679,7 @@ void updateMeters(struct Meters_t *Meters, int frame)
 
 void addRectanglesFromMeters(struct Rectangles_t *Rect, struct Meters_t *Meters)
 {
+  float alpha = 0.5;
   for (size_t meter = 0, rect = Rect->count; meter < MAX_METERS; meter++)
   {
     /* hold tick */
@@ -697,7 +698,7 @@ void addRectanglesFromMeters(struct Rectangles_t *Rect, struct Meters_t *Meters)
       Rect->colorR[rect] = 1.0;
       Rect->colorG[rect] = 0.0;
       Rect->colorB[rect] = 0.0;
-      Rect->colorA[rect] = 0.5;
+      Rect->colorA[rect] = alpha;
       rect++;
     }
 
@@ -711,7 +712,7 @@ void addRectanglesFromMeters(struct Rectangles_t *Rect, struct Meters_t *Meters)
     Rect->colorR[rect] = 1.0;
     Rect->colorG[rect] = 1.0;
     Rect->colorB[rect] = 0.0;
-    Rect->colorA[rect] = 0.5;
+    Rect->colorA[rect] = alpha;
     rect++;
 #endif
     /* all except volume bar */
@@ -723,7 +724,7 @@ void addRectanglesFromMeters(struct Rectangles_t *Rect, struct Meters_t *Meters)
     Rect->colorR[rect] = 0.0;
     Rect->colorG[rect] = 0.0;
     Rect->colorB[rect] = 0.0;
-    Rect->colorA[rect] = 0.5;
+    Rect->colorA[rect] = alpha;
     rect++;
 
 #if 0
@@ -1258,7 +1259,7 @@ void Render(void)
 
   int frame = 0;
   int num_frames = 1 + 10 * 60;
-  int endless = 0;
+  int endless = 1;
   int optimize = 0;
   //printf("Rendering %d frames.\n", num_frames);
 
