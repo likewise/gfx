@@ -6,6 +6,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -40,7 +41,7 @@ struct gbm_bo *previous_bo = NULL;
 // comment-out to allocate our own FBO -- improves render performance, unknown why yet
 #define USE_EGL_SURFACE
 #define USE_DYNAMIC_STREAMING
-#define MAX_METERS (512*4)
+#define MAX_METERS 128 //(512*4)
 #define NUM_RECT 4
 #define MAX_RECTS (MAX_METERS * NUM_RECT)
 
@@ -82,14 +83,15 @@ static void timespec_sub(struct timespec *t1, const struct timespec *t2)
 EGLConfig get_config(void)
 {
   EGLint egl_config_attribs[] = {
-    EGL_BUFFER_SIZE,  32,
+    EGL_BUFFER_SIZE, 32,
 #if 1
-    EGL_DEPTH_SIZE,   8,
+    EGL_DEPTH_SIZE, 8,
 #else
-    EGL_DEPTH_SIZE,   EGL_DONT_CARE,
+    EGL_DEPTH_SIZE, EGL_DONT_CARE,
 #endif
     EGL_STENCIL_SIZE, EGL_DONT_CARE,
-    EGL_RENDERABLE_TYPE,  EGL_OPENGL_ES2_BIT,
+    //EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+    EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
     /* The colour buffer will only be preserved over a swapbuffer if the
      * config used to create the surface has EGL_SWAP_BEHAVIOR_PRESERVED_BIT
      * set in EGL_SURFACE_TYPE, and EGL_SWAP_BEHAVIOR is set to EGL_BUFFER_PRESERVED
@@ -131,8 +133,8 @@ EGLConfig get_config(void)
 
 void RenderTargetInit(void)
 {
-//  int fd = open("/dev/dri/renderD128", O_RDWR);
-  int fd = open("/dev/dri/card0", O_RDWR);
+  int fd = open("/dev/dri/renderD128", O_RDWR);
+  //int fd = open("/dev/dri/card0", O_RDWR);
   assert(fd >= 0);
 
   gbm = gbm_create_device(fd);
@@ -147,7 +149,7 @@ void RenderTargetInit(void)
 
 #if 1
   int epoxy_egl_ver = epoxy_egl_version(display);
-  printf("libepoxy says %d\n", epoxy_egl_ver);
+  printf("epoxy_egl_version()=%d\n", epoxy_egl_ver);
 #endif
 
   egl_rc = eglInitialize(display, &majorVersion, &minorVersion);
@@ -200,7 +202,8 @@ void RenderTargetInit(void)
   assert(egl_rc == EGL_TRUE);
 
   const EGLint contextAttribs[] = {
-    EGL_CONTEXT_CLIENT_VERSION, 2,
+//    EGL_CONTEXT_CLIENT_VERSION, 2,
+    EGL_CONTEXT_CLIENT_VERSION, 3,
     EGL_NONE
   };
 
@@ -1011,12 +1014,15 @@ void Render(void)
   //assert(w == appWidth);
   //assert(h == appHeight);
 #elif 1
-  /* acp_app -platform synview >acp_app.log 2&>1 & */
+  /* acp_app -platform synview >acp_app.log 2>&1 & */
   /* gbm-egl-compositing */
   int fd = open("/tmp/wom0", O_RDONLY);
   assert(fd >= 0);
-  data = (uint8_t *)mmap(0, 1920*SCALE*1080*SCALE*4, PROT_READ, MAP_SHARED, fd, 0);
+  data = (uint8_t *)mmap(0, 1920*SCALE*1080*SCALE*4/*RGBA*/, PROT_READ, MAP_SHARED, fd, 0);
   assert(data);
+
+  /* https://stackoverflow.com/questions/3887636/how-to-manipulate-texture-content-on-the-fly/10702468#10702468 */
+
 #else
   /* generate synthetic background */
   data = malloc(appWidth * appHeight * 4);
@@ -1083,7 +1089,7 @@ void Render(void)
 #ifndef USE_EGL_SURFACE
 #error "Need to bind to the InitFBO framebuffer here."
 #endif
-  glBindFramebuffer(GL_FRAMEBUFFER, our_fbo/*0*/ /*default framebuffer*/);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0 /*default framebuffer*/);
 
   /* Setup 2D orthographic matrix view
    * scalex, 0,      0,      translatex,
@@ -1179,6 +1185,11 @@ void Render(void)
   glVertexAttribPointer(locVertexCol, 4/*r,g,b,a*/, GL_FLOAT, GL_FALSE, 0, NULL);
   CheckError();
 #endif
+
+          glTexSubImage2D(GL_TEXTURE_2D, 0/*level*/, 0, 0, appWidth, appHeight,
+            GL_RGBA, GL_UNSIGNED_BYTE, data);
+          CheckError();
+
 
   glEnable(GL_DEPTH_TEST);
 
@@ -1328,6 +1339,50 @@ void Render(void)
 
     addRectangle(Rect, 0, 0, appWidth, appHeight, +0.9);
 #endif
+
+#if 1
+    /* read dirty region updates in /tmp/wom0
+     * from a fifo */
+#if 1
+    int fifo_fd = open("/tmp/region_fifo", O_RDONLY | O_NONBLOCK);
+    FILE *fifo_stream = NULL;
+    if (fifo_fd >= 0) fifo_stream = fdopen(fifo_fd, "r");
+#else // fopen does not support non-blocking open  
+    FILE *fifo_stream = fopen("/tmp/region_fifo", "r");
+#endif
+    char *fifo_rc;
+    char line_buffer[256];
+    if (fifo_stream != NULL)
+    do {
+      fifo_rc = fgets(&line_buffer[0], 255, fifo_stream);
+      //printf("> %s", line_buffer);
+      if (fifo_rc == NULL) break;
+      if (strcmp(line_buffer, "end of frame\n") == 0) break;
+      else {
+        int x, y, w, h = 0;
+        int scan_rc = sscanf(line_buffer, "region %d %d %d %d", &x, &y, &w, &h);
+        if (scan_rc == 4) {
+          assert(h == 1);
+          //printf("region %d %d %d %d: %d\n", x, y, w, h, scan_rc);
+          glTexSubImage2D(GL_TEXTURE_2D, 0/*level*/, x, y, w, h,
+            GL_RGBA, GL_UNSIGNED_BYTE, data + (y * w + x) * 4);
+          CheckError();
+        } else {
+          printf("Could not parse region: %s\n", line_buffer);
+        }
+      }
+    } while (fifo_rc != NULL);
+    fclose(fifo_stream);
+#endif
+
+#if 0
+    /* upload (partially dirty region) -- this is one-copy, @TODO we want zero-copy */
+    glTexSubImage2D(GL_TEXTURE_2D, 0/*level*/,
+      0, 0, appWidth, appHeight,
+      GL_RGBA, GL_UNSIGNED_BYTE, data);
+    /* GL_RGBA, GL_BGRA */
+#endif
+
     addRectangle(Rect, 0, 0, appWidth, appHeight, +0.9);
 
     rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts_action_end);
@@ -1432,7 +1487,7 @@ void Render(void)
     }
 
     /* generate a PNG every 60 frames */
-    if ((frame % 60) == 0) {
+    if ((frame > 0) && (frame % 60) == 0) {
       GLubyte *content;
       content = malloc(appWidth * appHeight * 4);
       assert(content);
@@ -1475,9 +1530,30 @@ void Render(void)
   free(Meters); Meters = NULL;
 }
 
+int inspect_gl(void) {
+  int gl_version = epoxy_gl_version();
+  printf("epoxy_gl_version() = %d\n", gl_version);
+  bool is_desktop_gl = epoxy_is_desktop_gl();
+  printf("epoxy_is_desktop_gl() = %d\n", (int)is_desktop_gl);
+  bool has_intel = epoxy_has_gl_extension("GL_INTEL_map_texture");
+  printf("epoxy_has_gl_extension(GL_INTEL_map_texture) = %d\n", (int)has_intel);
+
+  int num_extensions;
+  glGetIntegerv(GL_NUM_EXTENSIONS, &num_extensions);
+  printf("GL_NUM_EXTENSIONS = %d\n", num_extensions);
+
+  for (int i = 0; i < num_extensions; i++) {
+    char *ext = (char *)glGetStringi(GL_EXTENSIONS, i);
+    if (ext) {
+      printf("%s\n", ext);
+    }
+  }
+}
+
 int main(void)
 {
   RenderTargetInit();
+  inspect_gl();
   InitGLES();
   Render();
   return 0;
