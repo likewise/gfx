@@ -1074,7 +1074,8 @@ void Render(void)
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w/*appWidth*/, h/*appHeight*/, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+  assert(data);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_BGRA, w/*appWidth*/, h/*appHeight*/, 0, GL_BGRA, GL_UNSIGNED_BYTE, data);
   CheckError();
 
 #if 1
@@ -1186,10 +1187,14 @@ void Render(void)
   CheckError();
 #endif
 
-          glTexSubImage2D(GL_TEXTURE_2D, 0/*level*/, 0, 0, appWidth, appHeight,
-            GL_RGBA, GL_UNSIGNED_BYTE, data);
-          CheckError();
+  /* update the full texture once */
+  CheckError();
 
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, appWidth);
+  glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+  glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+  glTexSubImage2D(GL_TEXTURE_2D, 0/*level*/, 0, 0, appWidth, appHeight, GL_BGRA, GL_UNSIGNED_BYTE, data);
+  CheckError();
 
   glEnable(GL_DEPTH_TEST);
 
@@ -1233,6 +1238,15 @@ void Render(void)
   setColor(0.0f, 0.0f, 0.0f, 0.0f);
   drawRect(0, 0, appWidth/2, appHeight/2);
 #endif
+
+#if 1
+    int fifo_fd = open("/tmp/region_fifo", O_RDONLY | O_NONBLOCK);
+    FILE *fifo_stream = NULL;
+    if (fifo_fd >= 0) fifo_stream = fdopen(fifo_fd, "r");
+#else // fopen does not support non-blocking open  
+    FILE *fifo_stream = fopen("/tmp/region_fifo", "r");
+#endif
+
   struct timespec ts_action_start, ts_action_end;
 
   /* total time */
@@ -1340,18 +1354,17 @@ void Render(void)
     addRectangle(Rect, 0, 0, appWidth, appHeight, +0.9);
 #endif
 
-#if 1
+    /* update the complete texture in GPU memory from the data in CPU memory */
+#if 0
+    glTexSubImage2D(GL_TEXTURE_2D, 0/*level*/, 0, 0, appWidth, appHeight,
+      GL_BGRA, GL_UNSIGNED_BYTE, data);
+#elif 1 /* update the GPU texture partially based on dirty regions */
     /* read dirty region updates in /tmp/wom0
      * from a fifo */
-#if 1
-    int fifo_fd = open("/tmp/region_fifo", O_RDONLY | O_NONBLOCK);
-    FILE *fifo_stream = NULL;
-    if (fifo_fd >= 0) fifo_stream = fdopen(fifo_fd, "r");
-#else // fopen does not support non-blocking open  
-    FILE *fifo_stream = fopen("/tmp/region_fifo", "r");
-#endif
+
     char *fifo_rc;
     char line_buffer[256];
+    int dirty_regions = 0;
     if (fifo_stream != NULL)
     do {
       fifo_rc = fgets(&line_buffer[0], 255, fifo_stream);
@@ -1362,25 +1375,30 @@ void Render(void)
         int x, y, w, h = 0;
         int scan_rc = sscanf(line_buffer, "region %d %d %d %d", &x, &y, &w, &h);
         if (scan_rc == 4) {
-          assert(h == 1);
-          //printf("region %d %d %d %d: %d\n", x, y, w, h, scan_rc);
+          dirty_regions++;
+          //printf("region (%d,%d,%d,%d,%d) ", x, y, w, h, scan_rc);
+
+          /* https://stackoverflow.com/questions/42385937/should-i-provide-a-full-or-partial-image-to-gltexsubimage2d */
+          glPixelStorei(GL_UNPACK_ROW_LENGTH, appWidth);
+          glPixelStorei(GL_UNPACK_SKIP_ROWS, y);
+          glPixelStorei(GL_UNPACK_SKIP_PIXELS, x);
+
           glTexSubImage2D(GL_TEXTURE_2D, 0/*level*/, x, y, w, h,
-            GL_RGBA, GL_UNSIGNED_BYTE, data + (y * w + x) * 4);
+            GL_BGRA, GL_UNSIGNED_BYTE, data);
           CheckError();
         } else {
           printf("Could not parse region: %s\n", line_buffer);
         }
       }
     } while (fifo_rc != NULL);
-    fclose(fifo_stream);
+    if (dirty_regions > 0) printf("dirty:%3d ", dirty_regions);
 #endif
 
 #if 0
     /* upload (partially dirty region) -- this is one-copy, @TODO we want zero-copy */
     glTexSubImage2D(GL_TEXTURE_2D, 0/*level*/,
       0, 0, appWidth, appHeight,
-      GL_RGBA, GL_UNSIGNED_BYTE, data);
-    /* GL_RGBA, GL_BGRA */
+      GL_BGRA, GL_UNSIGNED_BYTE, data);
 #endif
 
     addRectangle(Rect, 0, 0, appWidth, appHeight, +0.9);
@@ -1528,6 +1546,8 @@ void Render(void)
   glDeleteBuffers(1, &vertexColVBO);
 
   free(Meters); Meters = NULL;
+      fclose(fifo_stream);
+
 }
 
 int inspect_gl(void) {
