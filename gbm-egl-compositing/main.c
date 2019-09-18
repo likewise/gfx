@@ -41,7 +41,7 @@ struct gbm_bo *previous_bo = NULL;
 // comment-out to allocate our own FBO -- improves render performance, unknown why yet
 #define USE_EGL_SURFACE
 #define USE_DYNAMIC_STREAMING
-#define MAX_METERS (512/4)
+#define MAX_METERS 16 * 16 //(512/4)
 #define NUM_RECT 4
 #define MAX_RECTS (MAX_METERS * NUM_RECT)
 
@@ -616,7 +616,7 @@ struct Rectangles_t
 };
 
 /* what percentage of pixels represent VU meters? */
-#define VU_COVERAGE 10
+#define VU_COVERAGE 25
 #define VU_ROWS 4
 #define HOR_METERS (MAX_METERS/VU_ROWS)
 // 2 rectangles per meter
@@ -1244,6 +1244,7 @@ void Render(void)
     int fifo_fd = open("/tmp/region_fifo", O_RDONLY | O_NONBLOCK);
     FILE *fifo_stream = NULL;
     if (fifo_fd >= 0) fifo_stream = fdopen(fifo_fd, "r");
+    if (!fifo_stream) printf("Could not open /tmp/region_fifo\n");
 #else // fopen does not support non-blocking open  
     FILE *fifo_stream = fopen("/tmp/region_fifo", "r");
 #endif
@@ -1334,7 +1335,7 @@ void Render(void)
     }
 #endif
 
-    // wether or not to use optimized meters
+    // whether or not to use optimized meters
     optimize = 0;//(frame > 4);
     if (optimize) {
       addRectanglesFromMetersOptimized(Rect, Meters);
